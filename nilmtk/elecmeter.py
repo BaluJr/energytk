@@ -438,7 +438,7 @@ class ElecMeter(Hashable, Electric):
             print(kwargs)
 
         # Get source node
-        preprocessing = kwargs.pop('preprocessing', [])
+        preprocessing = kwargs.pop('preprocessing', []) # Das zweite Argument ist die Defaultausgabe wenn key nicht vorhanden.
         last_node = self.get_source_node(**kwargs)
         generator = last_node.generator
 

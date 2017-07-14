@@ -62,7 +62,7 @@ class HDFDataStore(DataStore):
                 print("   ", section)
             window_intersect = self.window.intersection(section)
 
-            if window_intersect.empty:
+            if window_intersect.empty: # Wenn der abgefragte Zeitabschnitt nicht in der Datenreihe enthalten ist
                 data = pd.DataFrame()
                 data.timeframe = section
                 yield data
