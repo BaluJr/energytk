@@ -263,7 +263,7 @@ class MeterGroup(Electric):
         elif isinstance(key, int) and not isinstance(key, bool):
             meters_found = []
             for meter in self.meters:
-                if isinstance(meter.instance(), int):
+                if isinstance(meter.instance(), ( int, long )): # Ah hier ist ein "Fehler"
                     if meter.instance() == key:
                         meters_found.append(meter)
                 elif isinstance(meter.instance(), (tuple, list)):
@@ -1298,7 +1298,7 @@ class MeterGroup(Electric):
         """
         function_map = {'energy': self.fraction_per_meter, 'entropy': self.entropy_per_meter}
         top_k_series = function_map[by](**kwargs)
-        top_k_series.sort(ascending=asc)
+        top_k_series.sort_values(ascending=asc)
         top_k_elec_meter_ids = top_k_series[:k].index
         top_k_metergroup = self.from_list(top_k_elec_meter_ids)
 
