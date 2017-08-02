@@ -2,16 +2,22 @@ from __future__ import print_function, division
 import numpy as np
 import pandas as pd 
 import sys
+import time
 
 
 # Fix the seed for repeatability of experiments
 SEED = 42
 np.random.seed(SEED)
 
+# Set a debug flag which activates time measurement (global)
+DEBUG = True
 
 def find_steady_states_transients(metergroup, cols, noise_level,
                                   state_threshold, **load_kwargs):
     """
+    Creates the states transient list over multiple meters in a 
+    meter group.
+
     Returns
     -------
     steady_states, transients : pd.DataFrame
@@ -40,7 +46,8 @@ def find_steady_states_transients(metergroup, cols, noise_level,
 
 def find_steady_states(dataframe, min_n_samples=2, state_threshold=15,
                        noise_level=70):
-    """Finds steady states given a DataFrame of power.
+    """Finds steady states given a DataFrame of power with only
+    a single column.
 
     Parameters
     ----------
@@ -73,14 +80,23 @@ def find_steady_states(dataframe, min_n_samples=2, state_threshold=15,
     transitions = []  # holds information on transitions
     steady_states = []  # steadyStates to store in returned Dataframe
     N = 0  # N stores the number of samples in state
-    time = dataframe.iloc[0].name  # first state starts at beginning
+    curTime = dataframe.iloc[0].name  # first state starts at beginning
 
     # Iterate over the rows performing algorithm
     print ("Finding Edges, please wait ...", end="\n")
     sys.stdout.flush()
 
+    oldTime = time.clock()
+    i = 0
     for row in dataframe.itertuples():
         #print(row)
+        i += 1
+        if DEBUG and i == 100000:
+            tmpTime = time.clock()
+            print(str(tmpTime - oldTime) + " seconds for 100000 steps")
+            oldTime = tmpTime
+            i = 0
+
 
         # test if either active or reactive moved more than threshold
         # http://stackoverflow.com/questions/17418108/elegant-way-to-perform-tuple-arithmetic
@@ -94,6 +110,7 @@ def find_steady_states(dataframe, min_n_samples=2, state_threshold=15,
         # logging.debug('The previous measurement is: %s' %
         # (previousMeasurement,))
 
+        # Elementwise absolute differences
         state_change = np.fabs(
             np.subtract(this_measurement, previous_measurement))
         # logging.debug('The State Change is: %s' % (stateChange,))
@@ -117,22 +134,22 @@ def find_steady_states(dataframe, min_n_samples=2, state_threshold=15,
                 # power information
 
                 # Avoid outputting first transition from zero
-                index_transitions.append(time)
-                # logging.debug('The current row time is: %s' % (time))
+                index_transitions.append(curTime)
+                # logging.debug('The current row curTime is: %s' % (curTime))
                 transitions.append(last_transition)
 
                 # I think we want this, though not specifically in Hart's algo notes
                 # We don't want to append a steady state if it's less than min samples in length.
                 # if N > min_n_samples:
-                index_steady_states.append(time)
-                # logging.debug('The ''time'' stored is: %s' % (time))
+                index_steady_states.append(curTime)
+                # logging.debug('The ''curTime'' stored is: %s' % (curTime))
                 # last states steady power
                 steady_states.append(estimated_steady_power)
 
             # 3B
             last_steady_power = estimated_steady_power
             # 3C
-            time = row[0]
+            curTime = row[0]
 
         # Step 4: if a new steady state is starting, zero counter
         if instantaneous_change:
@@ -156,9 +173,9 @@ def find_steady_states(dataframe, min_n_samples=2, state_threshold=15,
     # Appending last edge
     last_transition = np.subtract(estimated_steady_power, last_steady_power)
     if np.sum(np.fabs(last_transition) > noise_level):
-        index_transitions.append(time)
+        index_transitions.append(curTime)
         transitions.append(last_transition)
-        index_steady_states.append(time)
+        index_steady_states.append(curTime)
         steady_states.append(estimated_steady_power)
 
     # Removing first edge if the starting steady state power is more
