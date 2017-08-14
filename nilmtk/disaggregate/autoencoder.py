@@ -67,7 +67,10 @@ class Autoencoder(Disaggregator):
 
     #region The Cntk Functions
     def _create_model_naive(self, features):
-        ''' This function creates 
+        ''' This function creates the naive approach. It is currently used 
+        as the more complex approach was not realizable in the azure 
+        framework.
+
         Parameters
         ----------
         features : A single window of self.window_width
@@ -160,7 +163,7 @@ class Autoencoder(Disaggregator):
         #chunk["diff"] = chunk.diff(1).fillna(0)
         
         line = np.asarray(chunk[("power","active")], dtype = "float32")
-        C.Trainer(
+        
 
     def disaggregate(self, mains, output_datastore, **load_kwargs):
         """

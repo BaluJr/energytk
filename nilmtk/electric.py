@@ -345,6 +345,7 @@ class Electric(object):
             return np.NaN
 
         # we're using Python 3's division (which returns a float)
+        raise Exception("Hier wird Python 3 Funktionalitaet benutzt! Aufpassen!!!")
         x_bar = x_sum / x_n 
         y_bar = y_sum / y_n
 
