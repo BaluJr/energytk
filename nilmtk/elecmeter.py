@@ -345,7 +345,7 @@ class ElecMeter(Hashable, Electric):
 
         return match
 
-    def load(self, **kwargs):
+    def load(self, **load_kwargs):
         """Returns a generator of DataFrames loaded from the DataStore.
 
         By default, `load` will load all available columns from the DataStore.
@@ -396,7 +396,7 @@ class ElecMeter(Hashable, Electric):
         preprocessing : list of Node subclass instances
             e.g. [Clip()].
 
-        **kwargs : any other key word arguments to pass to `self.store.load()`
+        **load_kwargs : any other key word arguments to pass to `self.store.load()`
 
         Returns
         -------
@@ -408,38 +408,38 @@ class ElecMeter(Hashable, Electric):
         nilmtk.exceptions.MeasurementError if a measurement is specified
         which is not available.
         """
-        verbose = kwargs.get('verbose')
+        verbose = load_kwargs.get('verbose')
         if verbose:
             print()
             print("ElecMeter.load")
             print(self)
 
-        if 'sample_period' in kwargs:
-            kwargs.setdefault('resample', True)
+        if 'sample_period' in load_kwargs:
+            load_kwargs.setdefault('resample', True)
 
-        if kwargs.get('resample'):
+        if load_kwargs.get('resample'):
             # Set default key word arguments for resampling.
-            resample_kwargs = kwargs.setdefault('resample_kwargs', {})
+            resample_kwargs = load_kwargs.setdefault('resample_kwargs', {})
             resample_kwargs.setdefault('fill_method', 'ffill')
             if 'limit' not in resample_kwargs:
-                sample_period = kwargs.get('sample_period', self.sample_period())
+                sample_period = load_kwargs.get('sample_period', self.sample_period())
                 max_number_of_rows_to_ffill = int(
                     np.ceil(self.device['max_sample_period'] / sample_period))
                 resample_kwargs.update({'limit': max_number_of_rows_to_ffill})
 
         if verbose:
             print("kwargs after setting resample setting:")
-            print(kwargs)
+            print(load_kwargs)
 
-        kwargs = self._prep_kwargs_for_sample_period_and_resample(**kwargs)
+        load_kwargs = self._prep_kwargs_for_sample_period_and_resample(**load_kwargs)
 
         if verbose:
             print("kwargs after processing")
-            print(kwargs)
+            print(load_kwargs)
 
         # Get source node
-        preprocessing = kwargs.pop('preprocessing', []) # Das zweite Argument ist die Defaultausgabe wenn key nicht vorhanden.
-        last_node = self.get_source_node(**kwargs)
+        preprocessing = load_kwargs.pop('preprocessing', []) # Das zweite Argument ist die Defaultausgabe wenn key nicht vorhanden.
+        last_node = self.get_source_node(**load_kwargs)
         generator = last_node.generator
 
         # Connect together all preprocessing nodes
@@ -504,17 +504,17 @@ class ElecMeter(Hashable, Electric):
 
     def _convert_physical_quantity_and_ac_type_to_cols(
             self, physical_quantity=None, ac_type=None, cols=None,
-            **kwargs):
+            **load_kwargs):
         """Returns kwargs dict with physical_quantity and ac_type removed
-        and cols populated appropriately."""
+        and cols populated appropriately. Adapts the load_kwargs."""
         if cols:
             if (ac_type or physical_quantity):
                 raise ValueError("Cannot use `ac_type` and/or `physical_quantity`"
                                  " with `cols` parameter.")
             else:
                 if set(cols).issubset(self.available_columns()):
-                    kwargs['cols'] = cols
-                    return kwargs
+                    load_kwargs['cols'] = cols
+                    return load_kwargs
                 else:
                     msg = ("'{}' is not a subset of the available columns: '{}'"
                            .format(cols, self.available_columns()))
@@ -550,8 +550,8 @@ class ElecMeter(Hashable, Electric):
             msg += "Available columns = {}. ".format(self.available_columns())
             raise MeasurementError(msg)
 
-        kwargs['cols'] = cols
-        return kwargs
+        load_kwargs['cols'] = cols
+        return load_kwargs
 
     def dry_run_metadata(self):
         return self.metadata
@@ -606,7 +606,7 @@ class ElecMeter(Hashable, Electric):
         return self._get_stat_from_cache_or_compute(
             nodes, DropoutRate.results_class(), loader_kwargs)
 
-    def good_sections(self, **loader_kwargs):
+    def good_sections(self, **load_kwargs):
         """
         Parameters
         ----------
@@ -618,11 +618,11 @@ class ElecMeter(Hashable, Electric):
         if `full_results` is True then return nilmtk.stats.GoodSectionsResults
         object otherwise return list of TimeFrame objects.
         """
-        loader_kwargs.setdefault('n_look_ahead_rows', 10)
+        load_kwargs.setdefault('n_look_ahead_rows', 10)
         nodes = [GoodSections]
         results_obj = GoodSections.results_class(self.device['max_sample_period'])
         return self._get_stat_from_cache_or_compute(
-            nodes, results_obj, loader_kwargs)
+            nodes, results_obj, load_kwargs)
 
     def _get_stat_from_cache_or_compute(self, nodes, results_obj, loader_kwargs):
         """General function for computing statistics and/or loading them from

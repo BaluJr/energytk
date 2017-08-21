@@ -19,7 +19,7 @@ class TimeFrameGroup(list):
         args = [timeframes] if timeframes else []
         super(TimeFrameGroup, self).__init__(*args)
 
-    def plot(self, ax=None, y=0, height=1, gap=0.05, color='b', **kwargs):
+    def plot(self, ax=None, y=0, height=1, gap=0.05, color='b', **plot_kwargs):
         if ax is None:
             ax = plt.gca()
         ax.xaxis.axis_date()
@@ -28,7 +28,7 @@ class TimeFrameGroup(list):
             length = timeframe.timedelta.total_seconds() / SECS_PER_DAY
             bottom_left_corner = (timeframe.start, y + gap)
             rect = plt.Rectangle(bottom_left_corner, length, height,
-                                 color=color, **kwargs)
+                                 color=color, **plot_kwargs)
             ax.add_patch(rect)
 
         ax.autoscale_view()

@@ -99,9 +99,9 @@ class GoodSectionsResults(Results):
                                        for timeframe in good_sections]
         return {'statistics': {'good_sections': good_sections_list_of_dicts}}
 
-    def plot(self, **kwargs):
+    def plot(self, **plot_kwargs):
         timeframes = self.combined()
-        return timeframes.plot(**kwargs)
+        return timeframes.plot(**plot_kwargs)
         
     def import_from_cache(self, cached_stat, sections):
         # we (deliberately) use duplicate indices to cache GoodSectionResults

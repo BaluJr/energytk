@@ -102,9 +102,9 @@ class Electric(object):
                 return True
         return False
 
-    def power_series_all_data(self, **kwargs):
+    def power_series_all_data(self, **load_kwargs):
         chunks = []
-        for series in self.power_series(**kwargs):
+        for series in self.power_series(**load_kwargs):
             if len(series) > 0:
                 chunks.append(series)
         if chunks:
@@ -124,8 +124,11 @@ class Electric(object):
     def _prep_kwargs_for_sample_period_and_resample(self, sample_period=None,
                                                     resample=False,
                                                     resample_kwargs=None,
-                                                    **kwargs):
-        if 'preprocessing' in kwargs:
+                                                    **load_kwargs):
+        '''
+        This function sets the given resampling parameters inside the load_kwargs
+        '''
+        if 'preprocessing' in load_kwargs:
             warn("If you are using `preprocessing` to resample then please"
                  " do not!  Instead, please use the `sample_period` parameter"
                  " and set `resample=True`.")
@@ -144,10 +147,10 @@ class Electric(object):
                 resample_kwargs['rule'] = '{:d}S'.format(sample_period)
                 return safe_resample(df, **resample_kwargs)
 
-            kwargs.setdefault('preprocessing', []).append(
+            load_kwargs.setdefault('preprocessing', []).append(
                 Apply(func=resample_func))
 
-        return kwargs
+        return load_kwargs
 
     def _replace_none_with_meter_timeframe(self, start=None, end=None):
         if start is None or end is None:
@@ -159,7 +162,7 @@ class Electric(object):
         return start, end
 
     def plot(self, ax=None, timeframe=None, plot_legend=True, unit='W',
-             plot_kwargs=None, **kwargs):
+             plot_kwargs=None, **load_kwargs):
         """
         Parameters
         ----------
@@ -169,16 +172,16 @@ class Electric(object):
         plot_legend : boolean, optional
             Defaults to True.  Set to False to not plot legend.
         unit : {'W', 'kW'}
-        **kwargs
+        **load_kwargs
         """
         # Get start and end times for the plot
         timeframe = self.get_timeframe() if timeframe is None else timeframe
         if not timeframe:
             return ax
 
-        kwargs['sections'] = [timeframe]
-        kwargs = self._set_sample_period(timeframe, **kwargs)
-        power_series = self.power_series_all_data(**kwargs)
+        load_kwargs['sections'] = [timeframe]
+        load_kwargs = self._set_sample_period(timeframe, **load_kwargs)
+        power_series = self.power_series_all_data(**load_kwargs)
         if power_series is None or power_series.empty:
             return ax
 
@@ -199,12 +202,12 @@ class Electric(object):
 
         return ax
 
-    def _set_sample_period(self, timeframe, width=800, **kwargs):
+    def _set_sample_period(self, timeframe, width=800, **load_kwargs):
         # Calculate the resolution for the x axis
         duration = timeframe.timedelta.total_seconds()
         secs_per_pixel = int(round(duration / width))
-        kwargs.update({'sample_period': secs_per_pixel, 'resample': True})
-        return kwargs
+        load_kwargs.update({'sample_period': secs_per_pixel, 'resample': True})
+        return load_kwargs
 
     def proportion_of_upstream(self, **load_kwargs):
         """Returns a value in the range [0,1] specifying the proportion of
@@ -266,7 +269,7 @@ class Electric(object):
         energy = self.total_energy(**load_kwargs)
         return energy / periods
         
-    def proportion_of_energy(self, other, **loader_kwargs):
+    def proportion_of_energy(self, other, **load_kwargs):
         """Compute the proportion of energy of self compared to `other`.
 
         By default, only uses other.good_sections().  You may want to set 
@@ -281,15 +284,15 @@ class Electric(object):
         -------
         float [0,1] or NaN if other.total_energy == 0
         """
-        good_other_sections = other.good_sections(**loader_kwargs)
-        loader_kwargs.setdefault('sections', good_other_sections)
+        good_other_sections = other.good_sections(**load_kwargs)
+        load_kwargs.setdefault('sections', good_other_sections)
 
         # TODO test effect of setting `sections` for other
-        other_total_energy = other.total_energy(**loader_kwargs)
+        other_total_energy = other.total_energy(**load_kwargs)
         if other_total_energy.sum() == 0:
             return np.NaN
 
-        total_energy = self.total_energy(**loader_kwargs)
+        total_energy = self.total_energy(**load_kwargs)
         if total_energy.empty:
             return 0.0
 
@@ -608,14 +611,14 @@ class Electric(object):
              " `available_ac_types('power')` instead.", DeprecationWarning)
         return self.available_ac_types('power')
 
-    def load_series(self, **kwargs):
+    def load_series(self, **load_kwargs):
         """
         Parameters
         ----------
         ac_type : str
         physical_quantity : str
             We sum across ac_types of this physical quantity.
-        **kwargs : passed through to load().
+        **load_kwargs : passed through to load().
 
         Returns
         -------
@@ -625,8 +628,8 @@ class Electric(object):
         of the ac_types with '+' in between.  e.g. 'active+apparent'.
         """
         # Pull data through preprocessing pipeline
-        physical_quantity = kwargs['physical_quantity']
-        generator = self.load(**kwargs)
+        physical_quantity = load_kwargs['physical_quantity']
+        generator = self.load(**load_kwargs)
         for chunk in generator:
             if chunk.empty:
                 yield chunk
@@ -638,13 +641,13 @@ class Electric(object):
             chunk_to_yield.look_ahead = getattr(chunk, 'look_ahead', None)
             yield chunk_to_yield
 
-    def power_series(self, **kwargs):
+    def power_series(self, **load_kwargs):
         """Get power Series.
 
         Parameters
         ----------
         ac_type : str, defaults to 'best'
-        **kwargs :
+        **load_kwargs :
             Any other key word arguments are passed to self.load()
 
         Returns
@@ -652,11 +655,11 @@ class Electric(object):
         generator of pd.Series of power measurements.
         """
         # Select power column:
-        kwargs['physical_quantity'] = 'power'
-        kwargs.setdefault('ac_type', 'best')
-        return self.load_series(**kwargs)
+        load_kwargs['physical_quantity'] = 'power'
+        load_kwargs.setdefault('ac_type', 'best')
+        return self.load_series(**load_kwargs)
 
-    def activity_histogram(self, period='D', bin_duration='H', **kwargs):
+    def activity_histogram(self, period='D', bin_duration='H', **load_kwargs):
         """Return a histogram vector showing when activity occurs.
 
         e.g. to see when, over the course of an average day, activity occurs
@@ -681,9 +684,9 @@ class Electric(object):
         n_bins = int(n_bins)
 
         # Resample to `bin_duration` and load
-        kwargs['sample_period'] = offset_alias_to_seconds(bin_duration)
-        kwargs['resample_kwargs'] = {'how': 'max'}
-        when_on = self.when_on(**kwargs)
+        load_kwargs['sample_period'] = offset_alias_to_seconds(bin_duration)
+        load_kwargs['resample_kwargs'] = {'how': 'max'}
+        when_on = self.when_on(**load_kwargs)
 
         # Calculate histogram...
         hist = np.zeros(n_bins, dtype=int)
@@ -712,11 +715,11 @@ class Electric(object):
         return hist
 
     def plot_activity_histogram(self, ax=None, period='D', bin_duration='H',
-                                plot_kwargs=None, **kwargs):
+                                plot_kwargs=None, **load_kwargs):
         if ax is None:
             ax = plt.gca()
         hist = self.activity_histogram(bin_duration=bin_duration,
-                                       period=period, **kwargs)
+                                       period=period, **load_kwargs)
         if plot_kwargs is None:
             plot_kwargs = {}
         n_bins = len(hist)
@@ -729,7 +732,7 @@ class Electric(object):
         ax.set_ylabel('Count')
         return ax
 
-    def activation_series(self, *args, **kwargs):
+    def activation_series(self, *args, **load_kwargs):
         """Returns runs of an appliance.
 
         Most appliances spend a lot of their time off.  This function finds
@@ -751,7 +754,7 @@ class Electric(object):
             Number of rows to include before and after the detected activation
         on_power_threshold : int or float
             Defaults to self.on_power_threshold()
-        **kwargs : kwargs for self.power_series()
+        **load_kwargs : kwargs for self.power_series()
 
         Returns
         -------
@@ -763,10 +766,10 @@ class Electric(object):
         """
         warn("`activation_series()` is deprecated."
              "  Please use `get_activations()` instead!", DeprecationWarning)
-        return self.get_activations(*args, **kwargs)
+        return self.get_activations(*args, **load_kwargs)
 
     def get_activations(self, min_off_duration=None, min_on_duration=None,
-                        border=1, on_power_threshold=None, **kwargs):
+                        border=1, on_power_threshold=None, **load_kwargs):
         """Returns runs of an appliance.
 
         Most appliances spend a lot of their time off.  This function finds
@@ -788,7 +791,7 @@ class Electric(object):
             Number of rows to include before and after the detected activation
         on_power_threshold : int or float
             Defaults to self.on_power_threshold()
-        **kwargs : kwargs for self.power_series()
+        **load_kwargs : kwargs for self.power_series()
 
         Returns
         -------
@@ -804,8 +807,8 @@ class Electric(object):
             min_on_duration = self.min_on_duration()
 
         activations = []
-        kwargs.setdefault('resample', True)
-        for chunk in self.power_series(**kwargs):
+        load_kwargs.setdefault('resample', True)
+        for chunk in self.power_series(**load_kwargs):
             activations_for_chunk = get_activations(
                 chunk=chunk, min_off_duration=min_off_duration,
                 min_on_duration=min_on_duration, border=border,
@@ -846,7 +849,7 @@ def align_two_meters(master, slave, func='power_series'):
         yield pd.DataFrame({'master': master_chunk, 'slave': slave_chunk})
 
 
-def activation_series_for_chunk(*args, **kwargs):
+def activation_series_for_chunk(*args, **load_kwargs):
     """Returns runs of an appliance.
 
     Most appliances spend a lot of their time off.  This function finds
@@ -878,7 +881,7 @@ def activation_series_for_chunk(*args, **kwargs):
     """
     warn("`activation_series_for_chunk()` is deprecated."
          "  Please use `get_activations()` instead!", DeprecationWarning)
-    return get_activations(*args, **kwargs)
+    return get_activations(*args, **load_kwargs)
 
 
 def get_activations(chunk, min_off_duration=0, min_on_duration=0,

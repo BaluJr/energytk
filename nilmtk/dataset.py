@@ -87,24 +87,27 @@ class DataSet(object):
 
         self.store.window = TimeFrame(start, end, tz)
 
-    def describe(self, **kwargs):
+    def describe(self, **desc_kwargs):
         """Returns a DataFrame describing this dataset.
-        Each column is a building.  Each row is a feature."""
+        Each column is a building.  Each row is a feature.
+        desc_kwargs: Parameters passed to the pandas describe function.
+        """
         keys = self.buildings.keys()
         keys.sort()
         results = pd.DataFrame(columns=keys)
         for i, building in iteritems(self.buildings):
-            results[i] = building.describe(**kwargs)
+            results[i] = building.describe(**desc_kwargs)
         return results
 
-    def plot_good_sections(self, axes=None, label_func=None, gap=0, **kwargs):
+    def plot_good_sections(self, axes=None, label_func=None, gap=0, load_kwargs = {}, plot_kwargs = {}):
         """Plots all good sections for all buildings.
 
         Parameters
         ----------
         axes : list of axes or None.
             If None then they will be generated.
-
+        load_kwargs: arguments passed to loading
+        plot_kwargs: arguments passed to plotting
         Returns
         -------
         axes : list of axes
@@ -120,7 +123,7 @@ class DataSet(object):
         assert n == len(axes)
         for i, (ax, elec) in enumerate(zip(axes, self.elecs())):
             elec.plot_good_sections(ax=ax, label_func=label_func, gap=gap,
-                                    **kwargs)
+                                    load_kwargs = load_kwargs, plot_kwargs = plot_kwargs)
             ax.set_title('House {}'.format(elec.building()), y=0.4, va='top')
             ax.grid(False)
             for spine in ax.spines.values():
@@ -144,14 +147,14 @@ class DataSet(object):
         for elec in self.elecs():
             elec.clear_cache()
 
-    def plot_mains_power_histograms(self, axes=None, **kwargs):
+    def plot_mains_power_histograms(self, axes=None, load_kwargs={}, plot_kwargs={}, hist_kwargs={}):
         n = len(self.buildings)
         if axes is None:
             fig, axes = plt.subplots(n, 1, sharex=True)
         assert n == len(axes)
 
         for ax, elec in zip(axes, self.elecs()):
-            ax = elec.mains().plot_power_histogram(ax=ax, **kwargs)
+            ax = elec.mains().plot_power_histogram(ax=ax, load_kwargs=load_kwargs, plot_kwargs=plot_kwargs, hist_kwargs=hist_kwargs)
             ax.set_title('House {}'.format(elec.building()))
         return axes
 

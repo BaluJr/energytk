@@ -9,7 +9,7 @@ _to_ordinalf_np_vectorized = np.vectorize(mdates._to_ordinalf)
 
 
 def plot_series(series, ax=None, fig=None, 
-                date_format='%d/%m/%y %H:%M:%S', tz_localize=True, **kwargs):
+                date_format='%d/%m/%y %H:%M:%S', tz_localize=True, **plot_kwargs):
     """Plot function for series which is about 5 times faster than
     pd.Series.plot().
 
@@ -23,7 +23,7 @@ def plot_series(series, ax=None, fig=None,
     tz_localize : boolean, optional, default is True
         if False then display UTC times.
 
-    Can also use all **kwargs expected by `ax.plot`
+    Can also use all **plot_kwargs expected by `ax.plot`
     """
     if series is None or len(series) == 0:
         return ax
@@ -35,7 +35,7 @@ def plot_series(series, ax=None, fig=None,
         fig = plt.gcf()
 
     x = _to_ordinalf_np_vectorized(series.index.to_pydatetime())
-    ax.plot(x, series, **kwargs)
+    ax.plot(x, series, **plot_kwargs)
     tz = series.index.tzinfo if tz_localize else None
     ax.xaxis.set_major_formatter(
         mdates.DateFormatter(date_format, tz=tz))

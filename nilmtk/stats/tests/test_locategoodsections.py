@@ -39,17 +39,17 @@ class TestLocateGoodSections(unittest.TestCase):
         for meter in [meter1, meter2]:
             for chunksize in [None, 2**10, 2**29]:
                 if chunksize is None:
-                    kwargs = {}
+                    load_kwargs = {}
                 else:
-                    kwargs = {'chunksize': chunksize}
+                    load_kwargs = {'chunksize': chunksize}
 
-                source_node = meter.get_source_node(**kwargs)
+                source_node = meter.get_source_node(**load_kwargs)
                 good_sections = GoodSections(source_node)
                 good_sections.run()
                 combined = good_sections.results.simple()
                 meter.clear_cache()
-                meter.good_sections(**kwargs)
-                meter.good_sections(**kwargs)
+                meter.good_sections(**load_kwargs)
+                meter.good_sections(**load_kwargs)
                 meter.clear_cache()
 
         dataset.store.close()
