@@ -123,8 +123,21 @@ class MeterGroup(Electric):
                              if isinstance(m, ElecMeter) 
                              and m.metadata.get('disabled')]
         for meter in meters_to_disable:
-            self.meters.remove(meter)
-            self.disabled_meters.append(meter)
+            self.disable_meter(meter)
+
+    def disable_meter(self, meter):
+        '''
+        This function adds a certain meter to the disabled meters.
+        '''
+        self.meters.remove(meter)
+        self.disabled_meters.append(meter)
+        
+    def enable_meter(self, meter):
+        '''
+        This function adds a certain meter to the disabled meters.
+        '''
+        self.meters.append(meter)
+        self.disabled_meters.remove(meter)
 
     def union(self, other):
         """
@@ -136,7 +149,7 @@ class MeterGroup(Electric):
         if not isinstance(other, MeterGroup):
             raise TypeError()
         return MeterGroup(set(self.meters).union(other.meters))
-
+    
     def dominant_appliance(self):
         dominant_appliances = [meter.dominant_appliance()
                                for meter in self.meters]
@@ -344,13 +357,13 @@ class MeterGroup(Electric):
         selected_meters = []
         func = select_kwargs.pop('func', 'matches')
 
-        def get(_kwargs):
+        def get(select_kwarg):
             exception_raised_every_time = True
             exception = None
             no_match = True
             for meter in self.meters:
                 try:
-                    match = getattr(meter, func)(_kwargs)
+                    match = getattr(meter, func)(select_kwarg)
                 except KeyError as e:
                     exception = e
                 else:
@@ -359,7 +372,7 @@ class MeterGroup(Electric):
                         selected_meters.append(meter)
                         no_match = False
             if no_match:
-                raise KeyError("'No match for {}'".format(_kwargs))
+                raise KeyError("'No match for {}'".format(select_kwarg))
             if exception_raised_every_time and exception is not None:
                 raise exception
 
@@ -801,6 +814,12 @@ class MeterGroup(Electric):
         submeters = [meter for meter in self.meters
                      if not meter.is_site_meter()]
         return MeterGroup(submeters)
+       
+    def sitemeters(self):
+        """Returns new MeterGroup with only the site_meters included"""
+        submeters = [meter for meter in self.meters
+                     if meter.is_site_meter()]
+        return MeterGroup(submeters)
 
     def is_site_meter(self):
         """Returns True if any meters are site meters"""
@@ -840,6 +859,10 @@ class MeterGroup(Electric):
             return total_energy_results
 
     def _collect_stats_on_all_meters(self, load_kwargs, func, full_results):
+        '''
+        This helpfunction calculates a certain statistic defined by func for all
+        meters included in the set.
+        '''
         collected_stats = []
         for meter in self.meters:
             print_on_line("\rCalculating", func, "for", meter.identifier, "...   ")
@@ -990,7 +1013,8 @@ class MeterGroup(Electric):
         """
         Calls `method` on all pairs in `self.meters`.
 
-        Assumes `method` is symmetrical.
+        Assumes `method` is symmetrical, sothat it is only called once for 
+        all meters.
 
         Parameters
         ----------
@@ -1196,6 +1220,9 @@ class MeterGroup(Electric):
 
     def train_test_split(self, train_fraction=0.5):
         """
+        This function returns the timestamp which is advisable for splitting the load profile
+        into training and testing dataset.
+
         Parameters
         ----------
         train_fraction
@@ -1205,11 +1232,10 @@ class MeterGroup(Electric):
         split_time: pd.Timestamp where split should happen
         """
 
-        assert(
-            0 < train_fraction < 1), "`train_fraction` should be between 0 and 1"
+        assert(0 < train_fraction < 1), "`train_fraction` should be between 0 and 1"
 
         # TODO: currently just works with the first mains meter, assuming
-        # both to be simultaneosly sampled
+        # all to be simultaneosly sampled
 
         mains = self.mains()
         good_sections = self.mains().good_sections()
@@ -1626,6 +1652,15 @@ class MeterGroup(Electric):
     def all_meters(self):
         """Returns a list of self.meters + self.disabled_meters."""
         return self.meters + self.disabled_meters
+
+    def all_elecmeters(self):
+        resultmeters = []
+        for i, meter in enumerate(self.all_meters()):
+            if type(meter) is MeterGroup:
+                resultmeters.extend(MeterGroup.all_elecmeters(meter))
+            else:
+                resultmeters.append(meter)
+        return resultmeters
 
     def describe(self, compute_expensive_stats=True, **load_kwargs):
         """Returns pd.Series describing this MeterGroup."""

@@ -9,7 +9,13 @@ from nilmtk.timeframe import TimeFrame
 
 
 class TimeFrameGroup(list):
-    """A collection of nilmtk.TimeFrame objects."""
+    """A collection of nilmtk.TimeFrame objects.
+    The timeframegroup is used to store TimeFrames of a certain
+    type (eg. good sections) for a whole load profile together.
+    It then allows intersection functionality between multiple
+    load profiles to eg. find the good timeframes in all 
+    the TimeFrameGroups.
+    """
 
     def __init__(self, timeframes=None):
         if isinstance(timeframes, pd.core.indexes.datetimes.DatetimeIndex):

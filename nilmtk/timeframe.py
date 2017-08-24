@@ -11,7 +11,8 @@ from functools import total_ordering
 @total_ordering
 class TimeFrame(object):
     """A TimeFrame is a single time span or period,
-    e.g. from "2013" to "2014".
+    e.g. from "2013" to "2014". It is used throughout the whole toolkit 
+    for example to store status information like 'good_sections'.
 
     Attributes
     ----------
