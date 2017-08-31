@@ -13,7 +13,9 @@ class Results(object):
     objects contain a DataFrame, the index of which is the start timestamp for
     which the results are valid; the first column ('end') is the end
     timestamp for which the results are valid.  Other columns are accumulators 
-    for the results.
+    for the results. It is important to mention that apart from a simple 
+    result version, there is also the possibility that results are kept as 
+    class by passing 'full_results' into the pipeline.
 
     Attributes
     ----------
@@ -51,8 +53,11 @@ class Results(object):
         return self.combined()
 
     def append(self, timeframe, new_results):
-        """Append a single result.
-
+        """Appends a new result coming from a new chunk.
+        Usually each chunk has one bunch of results and that
+        one is appended by taking the timeframe of the chunk
+        as the timeframe parameter.
+        
         Parameters
         ----------
         timeframe : nilmtk.TimeFrame
@@ -91,13 +96,18 @@ class Results(object):
                 tf1.check_for_overlap(tf2)
 
     def update(self, new_result):
-        """Add results from a new chunk.
+        """ Add results from a new chunk. This adds a whole 
+        result element.
         
         Parameters 
         ---------- 
         new_result : Results subclass (same
             class as self) from new chunk of data.
 
+        See Also
+        --------
+        node
+        folder stats
         """
         if not isinstance(new_result, self.__class__):
             raise TypeError("new_results must be of type '{}'"
@@ -131,6 +141,9 @@ class Results(object):
 
     def import_from_cache(self, cached_stat, sections):
         """
+        Converts the data from the cache back into the original 
+        data form used during runtime.
+
         Parameters
         ----------
         cached_stat : DataFrame of cached data
@@ -172,7 +185,8 @@ class Results(object):
 
     def export_to_cache(self):
         """
-        Returns
+        Returns the contained data in a form, that can be 
+        stored in the cache.
         -------
         pd.DataFrame
 
@@ -203,4 +217,7 @@ class Results(object):
         return cols
 
     def __repr__(self):
+        '''
+        When printed, the results only show their data.
+        '''
         return str(self._data)

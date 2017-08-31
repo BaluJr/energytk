@@ -24,6 +24,9 @@ class Building(Hashable):
         self.metadata = {}
     
     def import_metadata(self, store, key, dataset_name):
+        '''
+        Import metadata. Called during startup.
+        '''
         self.metadata = store.load_metadata(key)
         if 'dataset' not in self.metadata:
             self.metadata['dataset'] = dataset_name
