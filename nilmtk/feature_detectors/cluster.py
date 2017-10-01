@@ -140,10 +140,11 @@ def _apply_clustering(X, max_num_clusters, exact_num_clusters=None):
 
 
 def hart85_means_shift_cluster(pair_buffer_df, cols):
-
+    if len(pair_buffer_df) < 2:
+        return pd.DataFrame(columns=cols)
 
     from sklearn.cluster import MeanShift
-    # Creating feature vector
+    # Creating feature vector (for each pair the median between the absolute values of the on- and off-event)
     cluster_df = pd.DataFrame()
     power_types = [col[1] for col in cols]
     if 'active' in power_types:
@@ -154,9 +155,8 @@ def hart85_means_shift_cluster(pair_buffer_df, cols):
                                                                      ((np.fabs(row['T1 Reactive']) + np.fabs(row['T2 Reactive'])) / 2), axis=1), index=pair_buffer_df.index)
 
     X = cluster_df.values.reshape((len(cluster_df.index), len(cols)))
-    ms = MeanShift(bin_seeding=True)
+    ms = MeanShift(bin_seeding=len(X) > 1000, cluster_all = False, min_bin_freq = 20)#, n_jobs = 4)
     ms.fit(X)
     labels = ms.labels_
     cluster_centers = ms.cluster_centers_
-    labels_unique = np.unique(labels)
     return pd.DataFrame(cluster_centers, columns=cols)

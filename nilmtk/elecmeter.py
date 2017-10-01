@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from six import iteritems
 from .preprocessing import Clip
-from .stats import TotalEnergy, GoodSections, DropoutRate
+from .stats import TotalEnergy, GoodSections, DropoutRate, NonZeroSections
 from .hashable import Hashable
 from .measurement import (select_best_ac_type, PHYSICAL_QUANTITIES,
                           check_ac_type, check_physical_quantity)
@@ -15,10 +15,14 @@ from .electric import Electric
 from nilmtk.exceptions import MeasurementError
 from .utils import flatten_2d_list, capitalise_first_letter
 from nilmtk.timeframegroup import TimeFrameGroup
+from nilmtk.stats.accelerators_stat import get_good_sections_fast
 import nilmtk
+
 
 ElecMeterID = namedtuple('ElecMeterID', ['instance', 'building', 'dataset'])
 
+class test():
+    pass
 
 class ElecMeter(Hashable, Electric):
 
@@ -61,6 +65,8 @@ class ElecMeter(Hashable, Electric):
             if self not in nilmtk.global_meter_group.meters:
                 nilmtk.global_meter_group.meters.append(self)
 
+
+    #region PROPERTIES
     @property
     def key(self):
         return self.metadata['data_location']
@@ -83,11 +89,40 @@ class ElecMeter(Hashable, Electric):
         self.metadata['name'] = value
 
     def _identifier_attr(self, attr):
+        '''
+        Gets a certain attribute from the identifier.
+        Main attributes are stored in it.
+        '''
         if self.identifier is None:
             return
         else:
             return getattr(self.identifier, attr)
 
+    def values_for_meter_or_building_metadata_key(self, key):
+        """
+        Included as a distinct function to allow polimorphism 
+        with MeterGroup
+        Parameters
+        ----------
+        key : str
+            e.g. 'zip'
+        
+        Returns
+        -------
+        list
+        """
+        if key in self.metadata:
+            return [self.metadata[key]]
+        else:
+            building_metadata = self.building_metadata
+            if key in building_metadata:
+                return [building_metadata[key]]
+        return []
+
+    #endregion
+
+
+    #region INFORMATION
     def get_timeframe(self):
         self._check_store()
         return self.store.get_timeframe(key=self.key)
@@ -159,6 +194,14 @@ class ElecMeter(Hashable, Electric):
         device_model = self.metadata.get('device_model')
         if device_model:
             return deepcopy(ElecMeter.meter_devices[device_model])
+        else:
+            return {}
+
+    @property
+    def building_metadata(self):
+        device_model = self.store.load_metadata('/building' + str(self.building()))
+        if device_model:
+            return deepcopy(device_model)
         else:
             return {}
 
@@ -303,7 +346,10 @@ class ElecMeter(Hashable, Electric):
 
         string += ')'
         return string
+    #endregion
 
+
+    #region LOADING
     def matches(self, key):
         """
         Parameters
@@ -340,6 +386,9 @@ class ElecMeter(Hashable, Electric):
                 elif metadata_value != v:
                     match = False
 
+            elif k in self.building_metadata:
+                if self.building_metadata[k] != v:
+                    match = False
             else:
                 raise KeyError("'{}' not a valid key.".format(k))
 
@@ -438,7 +487,7 @@ class ElecMeter(Hashable, Electric):
             print(load_kwargs)
 
         # Get source node
-        preprocessing = load_kwargs.pop('preprocessing', []) # Das zweite Argument ist die Defaultausgabe wenn key nicht vorhanden.
+        preprocessing = load_kwargs.pop('preprocessing', [])
         last_node = self.get_source_node(**load_kwargs)
         generator = last_node.generator
 
@@ -515,6 +564,10 @@ class ElecMeter(Hashable, Electric):
                 if set(cols).issubset(self.available_columns()):
                     load_kwargs['cols'] = cols
                     return load_kwargs
+                elif 'ignore_missing_columns' in load_kwargs and load_kwargs['ignore_missing_columns']:
+                    # This option allows to load only the available data
+                    load_kwargs['cols'] = list(set(cols).intersection(self.available_columns()))
+                    return load_kwargs
                 else:
                     msg = ("'{}' is not a subset of the available columns: '{}'"
                            .format(cols, self.available_columns()))
@@ -554,12 +607,24 @@ class ElecMeter(Hashable, Electric):
         return load_kwargs
 
     def dry_run_metadata(self):
+        '''
+        The function which is used by the node system to validate, whether all
+        necessary data is available. While nodes insert their postconditions, 
+        the elecmeter, which is the source of a pipeline, inserts its metadata.
+        '''
         return self.metadata
 
     def get_metadata(self):
         return self.metadata
 
     def get_source_node(self, **loader_kwargs):
+        '''
+        Data processing is always performed via nodes which perform 
+        calculations on the data and forward the data to the next node. 
+        This function creates an initial node from the datastore which
+        delivers the initial data into the stream processing.
+        TODO: The datastores could immediatly implement node.
+        '''
         if self.store is None:
             raise RuntimeError(
                 "Cannot get source node if meter.store is None!")
@@ -568,7 +633,10 @@ class ElecMeter(Hashable, Electric):
         generator = self.store.load(key=self.key, **loader_kwargs)
         self.metadata['device'] = self.device
         return Node(self, generator=generator)
+    #endregion
 
+
+    #region STATS
     def total_energy(self, **loader_kwargs):
         """
         Parameters
@@ -582,6 +650,24 @@ class ElecMeter(Hashable, Electric):
         else returns a pd.Series with a row for each AC type.
         """
         nodes = [Clip, TotalEnergy]
+        return self._get_stat_from_cache_or_compute(
+            nodes, TotalEnergy.results_class(), loader_kwargs)
+
+    def multistattest(self, **loader_kwargs):
+        """
+        Todo: Not yet implemented
+
+        Parameters
+        ----------
+        full_results : bool, default=False
+        **loader_kwargs : key word arguments for DataStore.load()
+
+        Returns
+        -------
+        if `full_results` is True then return TotalEnergyResults object
+        else returns a pd.Series with a row for each AC type.
+        """
+        nodes = [Clip, TotalEnergy, GoodSections]
         return self._get_stat_from_cache_or_compute(
             nodes, TotalEnergy.results_class(), loader_kwargs)
 
@@ -624,6 +710,30 @@ class ElecMeter(Hashable, Electric):
         return self._get_stat_from_cache_or_compute(
             nodes, results_obj, load_kwargs)
 
+    def nonzero_sections(self, ignore_gaps=False, **load_kwargs):
+        """
+        Parameters
+        ----------
+        full_results : bool, default=False
+        **loader_kwargs : key word arguments for DataStore.load()
+        ignore_gaps : bool, default=True
+            If True then will only look for nonzero sections in good sections.
+
+        Returns
+        -------
+        if `full_results` is True then return nilmtk.stats.GoodSectionsResults
+        object otherwise return list of TimeFrame objects.
+        """
+        
+        if ignore_gaps:
+            loader_kwargs['sections'] = self.good_sections(**loader_kwargs)
+
+        load_kwargs.setdefault('n_look_ahead_rows', 10) 
+        nodes = [NonZeroSections]
+        results_obj = NonZeroSections.results_class()
+        return self._get_stat_from_cache_or_compute(
+            nodes, results_obj, load_kwargs)
+
     def _get_stat_from_cache_or_compute(self, nodes, results_obj, loader_kwargs):
         """General function for computing statistics and/or loading them from
         cache.
@@ -636,11 +746,15 @@ class ElecMeter(Hashable, Electric):
         `Results._data` on disk.  The logic for doing this conversion lives
         in the `Results` class or subclass.  The cache can be cleared by calling
         `ElecMeter.clear_cache()`.
+        When 'preprocessing' is set, then the cache is not used because the cache
+        is only valid for the version without preprocessing.
 
         Parameters
         ----------
         nodes : list of nilmtk.Node classes
-        results_obj : instance of nilmtk.Results subclass
+        results_obj : instance of nilmtk.Results subclass. This is THE result 
+                      instance which is afterwards filled by all the results
+                      coming from the different chunks.
         loader_kwargs : dict
 
         Returns
@@ -669,70 +783,91 @@ class ElecMeter(Hashable, Electric):
             tf = self.get_timeframe()
             tf.include_end = True
             sections = [tf]
-        sections = TimeFrameGroup(sections)
+        sections = TimeFrameGroup(sections) # Takes care that NILMTK timeframe
         sections = [s for s in sections if not s.empty]
 
         # Retrieve usable stats from cache
         key_for_cached_stat = self.key_for_cached_stat(results_obj.name)
         if loader_kwargs.get('preprocessing') is None:
             cached_stat = self.get_cached_stat(key_for_cached_stat)
-            results_obj.import_from_cache(cached_stat, sections)
+            #results_obj.import_from_cache(cached_stat, sections) # Fill results_obj with cache
 
-            def find_sections_to_compute():
-                # Get sections_to_compute
-                results_obj_timeframes = results_obj.timeframes()
-                sections_to_compute = set(sections) - set(results_obj_timeframes)
-                sections_to_compute = sorted(sections_to_compute)
-                return sections_to_compute
-            try:
-                ac_type_keys = results_obj.simple().keys()
-            except:
-                sections_to_compute = find_sections_to_compute()
-            else:
-                if ac_types.issubset(ac_type_keys):
-                    sections_to_compute = find_sections_to_compute()
-                else:
-                    sections_to_compute = sections
-                    results_obj = results_obj_copy
-        else:
-            sections_to_compute = sections
-
-        if verbose and not results_obj._data.empty:
+            #def find_sections_to_compute():
+            #    # Get sections_to_compute
+            #    results_obj_timeframes = results_obj.timeframes()
+            #    sections_to_compute = set(sections) - set(results_obj_timeframes)
+            #    t1 = TimeFrameGroup(sections)
+            #    t2 = TimeFrameGroup(results_obj_timeframes)
+            #    sections_to_compute = t1.diff(t2)   # HIER IST DAS DIFF, DAS ICH NEU GEBAUT HABE!!! NUR WARUM GEHT ES GERADE NICHT MEHR???
+            #    sections_to_compute = sorted(sections_to_compute)
+            #    return sections_to_compute
+            #try:
+            #    ac_type_keys = results_obj.keys() #.simple().keys()
+            #except:
+            #    sections_to_compute = find_sections_to_compute()
+            #else:
+            #    if ac_types.issubset(ac_type_keys):
+            #        # IF ac_type in cache, only calculate remaining sections
+            #        sections_to_compute = find_sections_to_compute()
+            #    else:
+            #        # If false ac_type cached, still have to compute all
+            #        sections_to_compute = sections
+            #        results_obj = results_obj_copy
+        #else:
+        #    sections_to_compute = sections
+        if verbose and not cached_stat is None: #._data.empty:
             print("Using cached result.")
+            
+        # If necessary compute stats for missing sections 
+        if cached_stat is None: #sections_to_compute:
+            # If we need everything either way, we don't need expensive index lookup during load
+            #if not self.get_timeframe() in sections_to_compute:
+            #    loader_kwargs['sections'] = sections_to_compute
 
-        # If we get to here then we have to compute some stats
-        if sections_to_compute:
-            loader_kwargs['sections'] = sections_to_compute
-            computed_result = self._compute_stat(nodes, loader_kwargs)
+            #computed_result = self._compute_stat(nodes, loader_kwargs)
 
-            # Merge cached results with newly computed
-            results_obj.update(computed_result.results)
+            # Merge newly computed stats into the main stat result         
+            # DAS HIER BAUT MAN BESSER DIREKT IN DEN NODE EIN!!! DASS SEIN RESULT ERWEITERT WIRD
+            # DANN KANN MAN IMMER NOCH DAS RESULT VOM CACHING NEHMEN UND VERBINDEN!
+            # MAN SETZT DANN VON ALLEN NODE ELEMENTEN DAS RESULT MIT IN DIE PIPELINE ELEMENTE! 
+            # DANN KANN MAN SIE HINTEN RAUSHOLEN. SO KANN MAN DIE BERECHNUNG IN EINEM ZUG MACHEN.  
+            # => Ist ja so gemacht. Nur eben fuer jede Section!
+            # => Die einzige rweiterung waere das durchreichen von Results.                                                                 
+            #results_obj.update(computed_result.results)
+            results_obj = self._compute_stat(nodes, loader_kwargs)
 
             # Save to disk newly computed stats
-            stat_for_store = computed_result.results.export_to_cache()
+            stat_for_store = results_obj.results.export_to_cache()
             try:
-                self.store.append(key_for_cached_stat, stat_for_store)
+                #self.store.remove(key_for_cached_stat)
+                self.store.put(key_for_cached_stat, stat_for_store, fixed = True)
             except ValueError:
                 # the old table probably had different columns
                 self.store.remove(key_for_cached_stat)
                 self.store.put(key_for_cached_stat, results_obj.export_to_cache())
+        else:
+            results_obj.import_from_cache(cached_stat, sections) # Fill results_obj with cache
 
+        # Return the correct value depending on options
         if full_results:
             return results_obj
-        else:
-            res = results_obj.simple()
-            if ac_types:
-                try:
-                    ac_type_keys = res.keys()
-                except:
-                    return res
-                else:
-                    return pd.Series(res[ac_types], index=ac_types)
-            else:
+        res = results_obj #.simple()
+        if ac_types:
+            try:
+                ac_type_keys = res.keys()
+            except:
                 return res
+            else:
+                return pd.Series(res[ac_types], index=ac_types)
+        return res
 
     def _compute_stat(self, nodes, loader_kwargs):
         """
+        This function computes the stats by attaching the  
+        nodes from the nodes list paramter to each other and 
+        calculating the whole pipeline.
+        RETURNS THE NODE, NOT THE RESULT CLASS!!!
+
         Parameters
         ----------
         nodes : list of nilmtk.Node subclass objects
@@ -749,14 +884,18 @@ class ElecMeter(Hashable, Electric):
         key_for_cached_stat
         get_cached_stat
         """
-        results = self.get_source_node(**loader_kwargs)
+        last_node = self.get_source_node(**loader_kwargs)
         for node in nodes:
-            results = node(results)
-        results.run()
-        return results
+            last_node = node(last_node)
+        last_node.run()
+        last_node.results.finalize()
+        return last_node
 
     def key_for_cached_stat(self, stat_name):
         """
+        This function puts together the key, where the 
+        cached stat can be found in the HDF hierarchy.
+
         Parameters
         ----------
         stat_name : str
@@ -777,8 +916,30 @@ class ElecMeter(Hashable, Electric):
         else:
             meter_str = "{:d}".format(self.instance())
 
-        return ("building{:d}/elec/cache/meter{}/{:s}"
+        relative_path = ("building{:d}/elec/cache/meter{}/{:s}"
                 .format(self.building(), meter_str, stat_name))
+        #absolute_path = os.path.dirname(self.store.filename) + relative_path
+        #os.path.normpath(absolute_path) # clean for os
+        return relative_path
+
+    def calc_and_cache_stats(self, verbose = False, ):
+        '''
+        This function calls all available status calculation functions sothat 
+        the results are placed inside the stats-buffer. 
+        This comes handy when your want to preprocess the dataset in the
+        beginning sothat you can access the values in a fast way afterwards.
+        '''
+       
+        self.good_sections(chunksize=1000000, verbose = verbose)
+        #self.nonzero_sections(chunksize=1000000, verbose = verbose)
+        #self.total_energy(chunksize=1000000, verbose = verbose)
+        #self.dropout_rate(verbose=False)#, chunksize=5000000)
+        #tst2 = tst.invert()
+        #tst3 = tst2.remove_shorter_than(60)
+        #tst3.plot()
+        #i = 0
+
+
 
     def clear_cache(self, verbose=False):
         """
@@ -801,6 +962,9 @@ class ElecMeter(Hashable, Electric):
 
     def get_cached_stat(self, key_for_stat):
         """
+        Tries to load the cache from the store. Returns 
+        empty DataFrame if not available.
+
         Parameters
         ----------
         key_for_stat : str
@@ -817,14 +981,18 @@ class ElecMeter(Hashable, Electric):
         clear_cache
         """
         if self.store is None:
-            return pd.DataFrame()
+            return #pd.DataFrame()
         try:
             stat_from_cache = self.store[key_for_stat]
+            #stat_from_cache = pd.load(key_for_stat)
         except KeyError:
-            return pd.DataFrame()
+            return None #pd.DataFrame()
         else:
             return pd.DataFrame() if stat_from_cache is None else stat_from_cache
+    #endregion
 
+
+    #region FUTURE PROPOSALS
     # def total_on_duration(self):
     #     """Return timedelta"""
     #     raise NotImplementedError
@@ -856,3 +1024,4 @@ class ElecMeter(Hashable, Electric):
     #     cleaning steps have been executed and some summary results (e.g. the number of
     #     implausible values removed)"""
     #     raise NotImplementedError
+    #endregion

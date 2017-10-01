@@ -31,9 +31,9 @@ class Results(object):
     __metaclass__ = abc.ABCMeta
 
     def __init__(self):
-        self._data = pd.DataFrame(columns=['end'])
+        self._data = pd.DataFrame() #columns=['end']
 
-    def combined(self):
+    def finalize(self):
         """Return all results from each chunk combined.  Either return single
         float for all periods or a dict where necessary, e.g. if
         calculating Energy for a meter which records both apparent
@@ -48,11 +48,11 @@ class Results(object):
         """
         return copy.deepcopy(self._data)
 
-    def simple(self):
-        """Returns the simplest representation of the results."""
-        return self.combined()
+    #def simple(self):
+    #    """Returns the simplest representation of the results."""
+    #    return self.combined()
 
-    def append(self, timeframe, new_results):
+    def append(self, timeframe, new_results, check_overlap = True):
         """Appends a new result coming from a new chunk.
         Usually each chunk has one bunch of results and that
         one is appended by taking the timeframe of the chunk
@@ -62,6 +62,8 @@ class Results(object):
         ----------
         timeframe : nilmtk.TimeFrame
         new_results : dict
+        check_overlap : Set to False if to accelerate. 
+                        Useful when calculating statistics where you know it is in order either way.
         """
         if not isinstance(timeframe, TimeFrame):
             raise TypeError("`timeframe` must be of type 'nilmtk.TimeFrame',"
@@ -71,9 +73,10 @@ class Results(object):
                             .format(type(new_results)))
         
         # check that there is no overlap
-        for index, series in self._data.iterrows():
-            tf = TimeFrame(index, series['end'])
-            tf.check_for_overlap(timeframe)
+        if check_overlap:
+            for index, series in self._data.iterrows():
+                tf = TimeFrame(index, series['end'])
+                tf.check_for_overlap(timeframe)
 
         row = pd.DataFrame(index=[timeframe.start],
                            columns=['end'] + list(new_results))
@@ -84,6 +87,7 @@ class Results(object):
         self._data.sort_index(inplace=True)
 
     def check_for_overlap(self):
+        pass
         # TODO this could be made much faster
         n = len(self._data)
         index = self._data.index

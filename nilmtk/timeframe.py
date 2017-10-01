@@ -184,6 +184,11 @@ class TimeFrame(object):
         return intersect
 
     def query_terms(self, variable_name='timeframe'):
+        '''
+        Constructs a query used for the HDF file. The variable
+        name is actually the the name which is used in the created
+        expression.
+        '''
         if self.empty:
             raise Exception("TimeFrame is empty.")
         terms = []
@@ -296,6 +301,11 @@ class TimeFrame(object):
                 timeframe = TimeFrame(start=allowed_end, end=timeframe.end)
 
 
+    def contains(self, other):    
+        return (other.start >= self.start and
+                 other.end <= self.end)
+
+
 def split_timeframes(timeframes, duration_threshold):
     # TODO: put this into TimeFrameGroup. #316
     for timeframe in timeframes:
@@ -331,6 +341,7 @@ def merge_timeframes(timeframes, gap=0):
             merged.append(timeframe)
 
     return merged
+
 
 
 def list_of_timeframe_dicts(timeframes):

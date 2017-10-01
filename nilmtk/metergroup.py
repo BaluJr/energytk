@@ -12,6 +12,9 @@ from copy import copy, deepcopy
 import gc
 from collections import namedtuple
 from six import iteritems
+from .hashable import Hashable
+import time
+
 
 # NILMTK imports
 from .elecmeter import ElecMeter, ElecMeterID
@@ -40,7 +43,7 @@ class MeterGroup(Electric):
 
     """A group of ElecMeter objects. Can contain nested MeterGroup objects.
 
-    Implements many of the same methods as ElecMeter.
+    Implements many of the same methods as ElecMeter. 
 
     Attributes
     ----------
@@ -56,6 +59,8 @@ class MeterGroup(Electric):
 
     def import_metadata(self, store, elec_meters, appliances, building_id):
         """
+        Import metadata. Called during startup.
+
         Parameters
         ----------
         store : nilmtk.DataStore
@@ -173,6 +178,8 @@ class MeterGroup(Electric):
     def nested_metergroups(self):
         return [m for m in self.meters if isinstance(m, MeterGroup)]
 
+    #region SELECTION
+
     def __getitem__(self, key):
         """Get a single meter using appliance type and instance unless
         ElecMeterID is supplied.
@@ -276,7 +283,7 @@ class MeterGroup(Electric):
         elif isinstance(key, int) and not isinstance(key, bool):
             meters_found = []
             for meter in self.meters:
-                if isinstance(meter.instance(), ( int, long )): # Ah hier ist ein "Fehler"
+                if isinstance(meter.instance(), ( int )): # for python 2 check for (int ,long)
                     if meter.instance() == key:
                         meters_found.append(meter)
                 elif isinstance(meter.instance(), (tuple, list)):
@@ -305,7 +312,7 @@ class MeterGroup(Electric):
                 return True
         return False
 
-    def select(self, **select_kwargs):
+    def select(self, elecmeters_only = False, include_building_in_check = False, **select_kwargs):
         """Select a group of meters based on meter metadata.
 
         e.g.
@@ -353,6 +360,14 @@ class MeterGroup(Electric):
         * see Pandas.eval(): 
           * http://pandas.pydata.org/pandas-docs/stable/indexing.html#the-query-method-experimental
           * https://github.com/pydata/pandas/blob/master/pandas/computation/eval.py#L119
+
+        Parameters:
+        # elecmeters_only: bool
+        #   When set to true, only the contained atomar elecmeters are returned.
+        # Todo: Think about whether it might be necessary to allow exclusion of building metadata
+        # include_buildings_in_check: bool
+        #    Wheather the meters' corresponding building is also checked.
+        # 
         """
         selected_meters = []
         func = select_kwargs.pop('func', 'matches')
@@ -361,7 +376,12 @@ class MeterGroup(Electric):
             exception_raised_every_time = True
             exception = None
             no_match = True
-            for meter in self.meters:
+            
+            if elecmeters_only:
+                meters = self.all_elecmeters()
+            else:
+                meters = self.meters
+            for meter in meters:
                 try:
                     match = getattr(meter, func)(select_kwarg)
                 except KeyError as e:
@@ -404,9 +424,16 @@ class MeterGroup(Electric):
         """
         select_kwargs['func':'matches_appliances']
         return self.select(**select_kwargs)
+    
+    #endregion
+
+    #region SPECIAL CONSTUCTORS
 
     def from_list(self, meter_ids):
         """
+        Creates a metagroup from a list of meter_ids contained in 
+        this metergroup.
+
         Parameters
         ----------
         meter_ids : list or tuple
@@ -473,6 +500,9 @@ class MeterGroup(Electric):
         metergroup.from_list(new_identifiers)
         return metergroup
 
+    #endregion
+
+
     def __eq__(self, other):
         if isinstance(other, MeterGroup):
             return set(other.meters) == set(self.meters)
@@ -481,6 +511,14 @@ class MeterGroup(Electric):
 
     def __ne__(self, other):
         return not self.__eq__(other)
+
+    def __hash__(self):
+        '''
+        Has to be redefined in Python 3 since the definition of 
+        __eq__ makes the hash function disappear.
+        '''
+        return hash(self.identifier)
+
 
     @property
     def appliances(self):
@@ -492,7 +530,9 @@ class MeterGroup(Electric):
     def dominant_appliances(self):
         appliances = set()
         for meter in self.meters:
-            appliances.add(meter.dominant_appliance())
+            dominants = meter.dominant_appliance()
+            if not dominants is None:
+                appliances.add(dominants)
         return list(appliances)
 
     def values_for_appliance_metadata_key(self, key, 
@@ -519,6 +559,25 @@ class MeterGroup(Electric):
             value = appliance.type.get(key)
             append_or_extend_list(values, value)
         return list(set(values))
+    
+
+    def values_for_meter_or_building_metadata_key(self, key):
+        """
+        Parameters
+        ----------
+        key : str
+            e.g. 'zip'
+        
+        Returns
+        -------
+        list
+        """
+    
+        values = []
+        for meter in self.meters:
+            append_or_extend_list(values, 
+                meter.values_for_meter_or_building_metadata_key(key))
+        return list(set(values))
 
     def get_labels(self, meter_ids, pretty=True):
         """Create human-readable meter labels.
@@ -544,7 +603,7 @@ class MeterGroup(Electric):
 
     @property
     def identifier(self):
-        """Returns a MeterGroupID."""
+        """Returns the MeterGroupID for this MeterGroup."""
         return MeterGroupID(meters=tuple([meter.identifier for meter in self.meters]))
 
     def instance(self):
@@ -619,7 +678,7 @@ class MeterGroup(Electric):
         """Returns a generator of DataFrames loaded from the DataStore.
 
         By default, `load` will load all available columns from the DataStore.  
-        Specific columns can be selected in one or two mutually exclusive ways:
+        Specific columns can be selected in one of two mutually exclusive ways:
 
         1. specify a list of column names using the `cols` parameter.
         2. specify a `physical_quantity` and/or an `ac_type` parameter to ask 
@@ -693,6 +752,7 @@ class MeterGroup(Electric):
             load_kwargs['sections'] = [section]
             start = normalise_timestamp(section.start, freq)
             tz = None if start.tz is None else start.tz.zone
+            #tz = self.get_timeframe().start.tz
             index = pd.date_range(
                 start.tz_localize(None), section.end.tz_localize(None), tz=tz,
                 closed='left', freq=freq)
@@ -700,12 +760,19 @@ class MeterGroup(Electric):
                 index, columns, self.meters, load_kwargs)
             yield chunk
 
-    def _convert_physical_quantity_and_ac_type_to_cols(self, **load_kwargs):
+    def _convert_physical_quantity_and_ac_type_to_cols(self, ignore_missing_columns = False, **load_kwargs):
         all_columns = set()
         load_kwargs = deepcopy(load_kwargs)
         for meter in self.meters:
             load_kwargs_copy = deepcopy(load_kwargs)
-            new_kwargs = meter._convert_physical_quantity_and_ac_type_to_cols(**load_kwargs_copy)
+            try:
+                new_kwargs = meter._convert_physical_quantity_and_ac_type_to_cols(ignore_missing_columns = ignore_missing_columns, **load_kwargs_copy)
+            except Exception as e:
+                if ignore_missing_columns:
+                    continue
+                else:
+                   raise e
+
             cols = new_kwargs.get('cols', [])
             for col in cols:
                 all_columns.add(col)
@@ -928,9 +995,16 @@ class MeterGroup(Electric):
                      " the first meter in the meter group.  We should really"
                      " return the intersection of the good sections for all"
                      " meters.  This will be fixed...")
-            return self.meters[0].good_sections(**load_kwargs)
+            
+            #raise("Klappt das wirklich?")
+            good_sections = TimeFrameGroup([self.get_timeframe()])
+            for meter in self.meters:
+                good_sections = good_sections.intersection(meter.good_sections())
+            return good_sections
+            #return self.meters[0].good_sections(**load_kwargs)
         else:
             return []
+
 
     def dataframe_of_meters(self, **load_kwargs):
         """
@@ -1339,26 +1413,36 @@ class MeterGroup(Electric):
 
     def groupby(self, key, use_appliance_metadata=True):
         """
+        Groups the meters by either attributes of the connected 
+        appliances or attributes belonging to the meter and its 
+        house itself.
         e.g. groupby('category')
 
         Returns
         -------
         MeterGroup of nested MeterGroups: one per group
         """
-        if not use_appliance_metadata:
-            raise NotImplementedError()
-
-        values = self.values_for_appliance_metadata_key(key)
-        groups = []
+        if use_appliance_metadata:
+           values = self.values_for_appliance_metadata_key(key)
+        else:
+           values = self.values_for_meter_or_building_metadata_key(key)
+           
+        groups =  {}
         for value in values:
-            group = self.select_using_appliances(**{key: value})
+            group = self.select(elecmeters_only = True, **{key: value})
             group.name = value
-            groups.append(group)
+            groups[value] = group
 
-        return MeterGroup(groups)
+        return groups
+        #return MeterGroup(groups)
 
-    def get_timeframe(self):
+    def get_timeframe(self, intersection_instead_union=True):
         """
+        -------
+        Paramters
+        intersection_instead_union bool: When set to true only the timeframe which is valid for all contained 
+        meters is taken.
+
         Returns
         -------
         nilmtk.TimeFrame representing the timeframe which is the union
@@ -1371,7 +1455,10 @@ class MeterGroup(Electric):
             elif meter.get_timeframe().empty:
                 pass
             else:
-                timeframe = timeframe.union(meter.get_timeframe())
+                if intersection_instead_union:
+                    timeframe = timeframe.intersection(meter.get_timeframe())
+                else:
+                    timeframe = timeframe.union(meter.get_timeframe())
         return timeframe
 
     def plot(self, kind='separate lines', **plot_kwargs):
@@ -1492,6 +1579,8 @@ class MeterGroup(Electric):
                            include_disabled_meters=True, load_kwargs=None,
                            **plot_kwargs):
         """
+        Only defined in metergroup and not elecmeter because called from the dataset and 
+        that has always metergroups, one for each building.
         Parameters
         ----------
         label_func : str or None
@@ -1638,6 +1727,27 @@ class MeterGroup(Electric):
                 label = capitalise_first_letter(label)
             return label
         return ", ".join(set([meter.label(**label_kwargs) for meter in self.meters]))
+    
+    def calc_and_cache_stats(self, ignore_meters = None, verbose = False):
+        '''
+        This functon calculates all available statistics for for all available
+        meters sothat they are stored in the cache and can be accessed 
+        without delay in the future.
+        '''
+        
+        meter = self.meters[0]
+        original_name = meter.building_metadata['original_name'] 
+        if not ignore_meters is None and (original_name in ignore_meters):
+            if verbose:
+                print("Skipped " + str(meter))
+            return
+
+        t1 = time.time()
+        meter.calc_and_cache_stats(verbose)
+        if verbose:
+            t2 = time.time()
+            print(str(meter) + ":" + str(t2 - t1) + 'sec')
+            t1 = t2
 
     def clear_cache(self):
         """Clear cache on all meters in this MeterGroup."""
@@ -1700,6 +1810,8 @@ class MeterGroup(Electric):
 
         return series
 
+    def __len__(self):
+        return len(self.meters)
 
 def replace_dataset(identifier, dataset):
     """
@@ -1724,6 +1836,9 @@ def replace_dataset(identifier, dataset):
 
 def iterate_through_submeters_of_two_metergroups(master, slave):
     """
+    Finds the corresponding meters in the two metergroups by their IDs
+    and by replacing the dataset in them.
+
     Parameters
     ----------
     master, slave : MeterGroup
@@ -1771,6 +1886,7 @@ def combine_chunks_from_generators(index, columns, meters, load_kwargs):
 
     # Go through each generator to try sum values together
     for meter in meters:
+        # Load the data
         print_on_line("\rLoading data for meter", meter.identifier, "    ")
         load_kwargs_copy = deepcopy(load_kwargs)
         generator = meter.load(**load_kwargs_copy)
@@ -1798,7 +1914,7 @@ def combine_chunks_from_generators(index, columns, meters, load_kwargs):
             except KeyError:
                 continue
 
-            aligned = column.reindex(index, copy=False).values
+            aligned = column.reindex(index, copy=False).values.astype('float32')
             del column
             cumulator_col = cumulator_arr[:,i]
             where_both_are_nan = np.isnan(cumulator_col) & np.isnan(aligned)
@@ -1834,7 +1950,6 @@ def combine_chunks_from_generators(index, columns, meters, load_kwargs):
 
     del columns_to_average_counter
     gc.collect()
-    print()
     print("Done loading data all meters for this chunk.")
     cumulator.timeframe = timeframe
     return cumulator

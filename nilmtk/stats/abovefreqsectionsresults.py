@@ -7,8 +7,10 @@ from nilmtk.timeframe import TimeFrame, convert_none_to_nat, convert_nat_to_none
 from nilmtk.utils import get_tz, tz_localize_naive
 from nilmtk.timeframegroup import TimeFrameGroup
 
-class NonZeroSectionsResults(Results):
+class AboveFreqSectionsResults(Results):
     """
+    TODO
+
     Attributes
     ----------
     _data : pd.DataFrame
@@ -17,10 +19,10 @@ class NonZeroSectionsResults(Results):
         `sections` is a TimeFrameGroups object (a list of nilmtk.TimeFrame objects)
     """
     
-    name = "nonzero_sections"
+    name = "AboveFreq_sections"
 
     def __init__(self):
-        super(NonZeroSectionsResults, self).__init__()
+        super(AboveFreqSectionsResults, self).__init__()
 
     def append(self, timeframe, new_results):
         """Append a single result.
@@ -31,76 +33,78 @@ class NonZeroSectionsResults(Results):
         new_results : {'sections': list of TimeFrame objects}
         """
         new_results['sections'] = [TimeFrameGroup(new_results['sections'][0])]
-        super(NonZeroSectionsResults, self).append(timeframe, new_results)
+        super(AboveFreqSectionsResults, self).append(timeframe, new_results)
 
     def combined(self):
-        """ Merges together any nonzero sections which span multiple segments.
-        Whether there are gaps in between does not matter.
+        """Merges together any AboveFreq sections which span multiple segments,
+        as long as those segments are adjacent 
+        (previous.end - max_sample_period <= next.start <= previous.end).
 
         Returns
         -------
         sections : TimeFrameGroup (a subclass of Python's list class)
         """
-
         sections = TimeFrameGroup()
+        end_date_of_prev_row = None
         for index, row in self._data.iterrows():
             row_sections = row['sections']
 
             # Check if first TimeFrame of row_sections needs to be merged with
-            # last TimeFrame of previous section (Then it is set to None as described in 'get_nonzero_sections')
-            
-                #if row_sections[0].start is None:
-                # Prev ends with None and current starts with None -> merge
+            # last TimeFrame of previous section (Then it is set to None as described in 'get_AboveFreq_sections')
+            if (end_date_of_prev_row is not None):
 
-            # When there was a None at prev end -> Merge
-            if len(sections) > 1 and sections[-1].end is None:
-                sections[-1].end = row_sections[0].end
-                row_sections.pop(0)
-                # Prev ends not with None and current starts with None -> new section
-                #else:
-                #    row_sections[0].start = index 
-                #else:
-                #    # Current starts not with None but previous -> End section in last section
-                #    if sections and sections[-1].end is None:
-                #        try:
-                #            sections[-1].end = end_date_of_prev_row
-                #        except ValueError: # end_date_of_prev_row before sections[-1].start
-                #            pass
+                if row_sections[0].start is None:
+                    assert sections[-1].end is None
+                    sections[-1].end = row_sections[0].end
+                    row_sections.pop(0)
+                else:
+                    # row_sections[0] and sections[-1] were not in adjacent chunks
+                    # so check if they are both open-ended and close them...
+                    if sections and sections[-1].end is None:
+                        try:
+                            sections[-1].end = end_date_of_prev_row
+                        except ValueError: # end_date_of_prev_row before sections[-1].start
+                            pass
+                    if row_sections and row_sections[0].start is None:
+                        try:
+                            row_sections[0].start = index
+                        except ValueError:
+                            pass
                 
+            end_date_of_prev_row = row['end']
             sections.extend(row_sections)
 
         if sections:
             sections[-1].include_end = True
             if sections[-1].end is None:
-                sections[-1].end = row['end']
-     
+                sections[-1].end = end_date_of_prev_row
+
         return sections
 
     def unify(self, other):
-        super(NonZeroSectionsResults, self).unify(other)
+        super(AboveFreqSectionsResults, self).unify(other)
         for start, row in self._data.iterrows():
             other_sections = other._data['sections'].loc[start]
             intersection = row['sections'].intersection(other_sections)
             self._data['sections'].loc[start] = intersection
 
     def to_dict(self):
-        nonzero_sections = self#.combined()
-        nonzero_sections_list_of_dicts = [timeframe.to_dict() 
-                                       for timeframe in nonzero_sections]
-        return {'statistics': {'nonzero_sections': nonzero_sections_list_of_dicts}}
+        AboveFreq_sections = self.combined()
+        AboveFreq_sections_list_of_dicts = [timeframe.to_dict() 
+                                       for timeframe in AboveFreq_sections]
+        return {'statistics': {'AboveFreq_sections': AboveFreq_sections_list_of_dicts}}
 
     def plot(self, **plot_kwargs):
-        timeframes = self#.combined()
+        timeframes = self.combined()
         return timeframes.plot(**plot_kwargs)
         
-    def import_from_cache(self, cached_stat, sections):   
-        # HIER IST DAS PROBLEM BEIM STATISTIKEN LESEN! DIE WERDEN CHUNK Weise GESPEICHERT, aber hier wird auf das Vorhandensein der gesamten Section als ganzes vertraut
+    def import_from_cache(self, cached_stat, sections):
         '''
         As explained in 'export_to_cache' the sections have to be stored 
         rowwise. This function parses the lines and rearranges them as a 
-        proper NonZeroSectionsResult again.
+        proper AboveFreqSectionsResult again.
         '''
-        # we (deliberately) use duplicate indices to cache NonZeroSectionResults
+        # we (deliberately) use duplicate indices to cache AboveFreqSectionResults
         grouped_by_index = cached_stat.groupby(level=0)
         tz = get_tz(cached_stat)
         for tf_start, df_grouped_by_index in grouped_by_index:
@@ -108,7 +112,7 @@ class NonZeroSectionsResults(Results):
             for tf_end, sections_df in grouped_by_end:
                 end = tz_localize_naive(tf_end, tz)
                 timeframe = TimeFrame(tf_start, end)
-                if any([section.contains(timeframe) for section in sections]): # Had to adapt this, because otherwise no cache use when loaded in chunks
+                if timeframe in sections:
                     timeframes = []
                     for _, row in sections_df.iterrows():
                         section_start = tz_localize_naive(row['section_start'], tz)

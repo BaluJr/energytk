@@ -3,32 +3,38 @@ import multiprocessing
 
 # Packages for data handling and machine learning 
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 from sklearn_pandas import DataFrameMapper
 import sklearn.preprocessing, sklearn.decomposition, sklearn.linear_model, sklearn.pipeline, sklearn.metrics
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.cluster import KMeans, AgglomerativeClustering
 import sklearn.metrics
+from .clusterer import Clusterer
+from nilmtk import DataSet, ExternDataSet
 
 
+import pickle as pckl
 
 class ExtCorrelationClustererModel(object):
     params = {
         # The external, which is used to create the vectors for each element, DataSet
-        'ext_data_dataset': "E:/ExternalData/ExtData.hdf",
+        'ext_data_dataset': "C:\\Users\\maxim_000\\Documents\\InformatikStudium_ETH\\Masterarbeit\\6_Data\\Tmp\\ExtData.hdf",
         
         # The features which are used during the forecasting
-        'externalFeatures': ['temperature', 'dewpoint', 'national', 'school'], #, 'time'
+        # ('cloudcover', ''), ('humidity', 'relative'), ('temperature', ''), ('humidity', 'absolute'), ('dewpoint', ''), ('windspeed', ''), ('precip', '')
+        # ('national', ''), ('school', '')
+        'externalFeatures': [('temperature', ''), ('dewpoint', ''), ('national', ''), ('school', '')], #, 'time'
         'shifts': list(range(1,5)),#48)), # +[cur*96 for cur in range(7)] + [cur*96*7 for cur in range(4)],
 
         # Self correlation resolution (The resolution in which the self resolution is checked)
         'self_corr_freq': 60,
-    },
+    }
         
     config = {
         'size_input_queue': 0,
         'verbose': True
-    },
+    }
 
     # This is the resulting dataframe with the relations between all meters to all external features
     correlations = None
@@ -48,7 +54,7 @@ class ExtCorrelationClusterer(Clusterer):
     After training, this model contains a vector for each meter.
     Take care, that every element might have separate data to be benchmarked against.
     """
-    model_class = ArimaForecasterModel
+    model_class = ExtCorrelationClustererModel
 
     def __init__(self, model = None):
         """
@@ -56,6 +62,22 @@ class ExtCorrelationClusterer(Clusterer):
         If no model is given, it createsa default one.
         """
         super(ExtCorrelationClusterer, self).__init__(model)
+
+        
+    def correlate(self,input):
+        '''
+        This is the simple function which is executed in parallel to 
+        accellerate the process.
+        Each process only gets the location of its target timeline as 
+        an input. It then only takes the data from the global element.
+        '''
+        if isinstance(input, int):
+            shift = input
+            return current_loadseries.autocorr(shift )
+        else:
+            dim = input
+            data = group_data[dim]
+            return current_loadseries.corr(data)
 
 
 
@@ -72,7 +94,6 @@ class ExtCorrelationClusterer(Clusterer):
         '''
 
         # We need global variables sothat they can be accessed in the subprocesses
-        global ext_data
         global current_loadseries
         global group_data
         clusterer_timeseries = []
@@ -81,65 +102,59 @@ class ExtCorrelationClusterer(Clusterer):
         if n_jobs == -1:
             n_jobs = multiprocessing.cpu_count()
 
-        # Prepare result container
+        # Prepare result frame
         dims = self.model.params['externalFeatures'] + self.model.params['shifts']
         self.model.correlations = pd.DataFrame(columns=dims)
         corrs = self.model.correlations
 
         # Load the external data specified in the params (low res -> all in memory)
-        extDataSet = DataSet(self.model.params['ext_data_dataset'])
-        clusterer_timeseries['const']: extDataSet.load('', dtype='float32')
-        highest_freq = max([dev.metadata.sample_rate for dev in extData.devices()] + self.model.params['self_corr_freq'])
+        extDataSet = ExternDataSet(self.model.params['ext_data_dataset'])
+        periodsExtData = [int(dev['sample_period']) for dev in extDataSet.metadata['meter_devices'].values()]
+        min_sampling_period = min(periodsExtData + [self.model.params['self_corr_freq']])
 
         # Group the meters by there zip
-        metercount = len(meters)
-        metergroups = meters.groupby('zip')
-        processed_meters = 0
-        for group in metergroups:
+        try:
+            corrs = pckl.load(open("coors.pckl",'rb'))
+        except:
+            metergroups = meters.groupby('zip', use_appliance_metadata = False)
+            processed_meters = 0
+            for zip in metergroups:
+                group = metergroups[zip]
+                # Load the groupspecific data (weather)
+                group_data = extDataSet.get_data_for_group(zip, group.get_timeframe(), min_sampling_period, self.model.params['externalFeatures'])
+                # Then go through all meters
+                for meter in group.meters:
+                    processed_meters += 1
 
-            # Load the groupspecific data (weather)
-            group_data = extData.getFor(group, self.model.params['externalFeatures']) #Irgendwie laden
-
-            # Then go through all meters
-            for meter in group:
-                processed_meters += 1
-
-                # meters load
-                current_loadseries = meter.load(dtype='float16', load_kwargs={'freq':highest_freq})
+                    # meters load
+                    current_loadseries = meter.power_series_all_data(dtype='float16', load_kwargs={'sample_period':min_sampling_period})
+                    #current_loadseries = current_loadseries.tz_localize('UTC')
                
-                pool = multiprocessing.Pool(processes=n_jobs)
-                corr_vector = pool.map(corr, dims)
-                corrs.loc[meter.identifier(),:] = corr_vector
+                    #pool = multiprocessing.Pool(processes=n_jobs)
+                    #corr_vector = pool.map(correlate, dims)
+                    corr_vector = []
+                    for dim in dims:
+                        corr_vector.append(self.correlate(dim))
+                    corrs.loc[meter.identifier,:] = corr_vector
 
-                if self.model.config['verbose']:
-                    print('Correlation set up for %s - %i/%i'.format(meter,processed_meters,metercount))
+                    if self.model.config['verbose']:
+                        print('Correlation set up for {0} - {1}/{2}'.format(meter,processed_meters,len(group.meters)))
+            pckl.dump(corrs, open("coors.pckl",'wb'))
 
         # Do the clustering after the created vectors
-        centroids, assignments  = self.model._cluster_vectors()
-        corrs.loc['cluster'] = assignments
+        centroids, assignments  = self._cluster_vectors(corrs)
+        corrs['cluster'] = assignments
         self.model.assignments = assignments  
         self.model.centroids = centroids
 
 
         # Return the clustering result as groups of metering ids (than one can easily select)
         to_list = lambda x: list(x)
-        tst = dataToRequest.groupby('cluster').agg({'index':to_list})
-        return tst # Hier sollten Listen der Identifier entstanden sein
+        tst = corrs.reset_index().groupby('cluster').agg({'index':to_list})
+        return tst['index'] # Hier sollten Listen der Identifier entstanden sein
 
 
 
-
-
-    def correlate(self,input):
-        '''
-        This is the simple function which is executed in parallel to 
-        accellerate the process.
-        Each process only gets the location of its target timeline as 
-        an input. It then only takes the data from the global element.
-        '''
-        if 'shift' in input:
-            freq = tst
-        return current_loadseries.autocorr(shift)
 
 
         
@@ -159,10 +174,15 @@ class ExtCorrelationClusterer(Clusterer):
         labels: ndarray of int32s
             The assignment of each vector to the clusters
         '''
-              
+
+        correlation_dataframe = correlation_dataframe.fillna(0)
+           
         # Preprocess dataframe
-        mapper = DataFrameMapper([('active transition', None)]) 
-        clusteringInput = mapper.fit_transform(events.copy())
+        mappings = [(dim, None) for dim in correlation_dataframe.columns]
+
+
+        mapper = DataFrameMapper(mappings) 
+        clusteringInput = mapper.fit_transform(correlation_dataframe.copy())
     
         # Do the clustering
         num_clusters = -1
@@ -172,8 +192,8 @@ class ExtCorrelationClusterer(Clusterer):
         k_means_labels_unique = {}
 
         # Special case:
-        if len(events) == 1: 
-            return np.array([events.iloc[0]["active transition"]]), np.array([0])
+        if len(correlation_dataframe) == 1: 
+            return np.array([events.iloc[0,:]]), np.array([0])
 
         # If exact cluster number not specified, use cluster validity measures to find optimal number
         for n_clusters in range(2, max_num_clusters):
@@ -191,10 +211,10 @@ class ExtCorrelationClusterer(Clusterer):
                     if sh_n > silhouette:
                         silhouette = sh_n
                         num_clusters = n_clusters
-                except Exception as inst:
+                except Exception as instance:
                     num_clusters = n_clusters
 
-            except Exception:
+            except Exception as e:
                 if num_clusters > -1:
                     return k_means_cluster_centers[num_clusters]
                 else:
@@ -218,20 +238,6 @@ class ExtCorrelationClusterer(Clusterer):
 
 
 
-
-    def forecast(self):
-        
-
-
-
-
-
-def RandomTimeSeries(start, freq, end=None, periods=-1):
-    if periods != -1:
-        series = pd.date_range(start=start, periods=period, freq=freq)
-    else:
-        series = pd.date_range(start=start, end=end, freq=freq)
-    return pd.Series(np.random.randn(len(series)), index=series)
 
 
 

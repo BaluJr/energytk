@@ -1,3 +1,7 @@
+import pandas as pd
+from statsmodels.tsa.arima_model import ARIMA
+from matplotlib import pyplot
+
 class ArimaForecasterModel(object):
     params = {
         # The number of lag observations included in the model, also called the lag order.
@@ -8,7 +12,7 @@ class ArimaForecasterModel(object):
         'q': 1 
     }
 
-    model = ARIMA(series, order=(5,1,0))
+    model = None
 
 class ArimaForecaster(Forecaster):
     """This is a forecaster based on the
@@ -25,9 +29,11 @@ class ArimaForecaster(Forecaster):
         """
         super(ANNForecaster, self).__init__(model)
 
-    def train(self):
-
-        # fit model
+    def train(self, meters, verbose = False):
+        meters.power_series_all_data(sample_period=900
+                                     )
+        params = self.model.parameters
+        self.model.model = ARIMA(series, order=(params.p,params.params.d,params.p))
         model_fit = model.fit(disp=0)
         
         if verbose:

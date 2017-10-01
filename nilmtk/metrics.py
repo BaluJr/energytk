@@ -73,6 +73,32 @@ def error_in_assigned_energy(predictions, ground_truth):
     return pd.Series(errors)
 
 
+def error_in_unsupervised_assigned_energy(predictions, ground_truth, tolerance = 0):
+    """ 
+    This is the self made error function for calculating the error of the disaggregation.
+    Parameters:
+    predictions: MeterGroup
+        The result of the disaggregation
+    ground_truth: MeterGroup
+        The original appliances recorded by plugs and included within the 
+        source dataset.
+    """
+
+    # Start from second, becasue first is the disaggregated load
+    errors = {}
+    for predictedLoad in predictions:
+        predictedActiveSections = predictedLoad.good_sections()
+        for gtLoad in ground_truth:
+            gtActiveSections = gtLoad
+        both_sets_of_meters = iterate_through_submeters_of_two_metergroups(predictions, ground_truth)
+    for pred_meter, ground_truth_meter in both_sets_of_meters:
+        sections = pred_meter.good_sections()
+        ground_truth_energy = ground_truth_meter.total_energy(sections=sections)
+        predicted_energy = pred_meter.total_energy(sections=sections)
+        errors[pred_meter.instance()] = np.abs(ground_truth_energy - predicted_energy)
+    return pd.Series(errors)
+
+
 def fraction_energy_assigned_correctly(predictions, ground_truth):
     '''Compute fraction of energy assigned correctly
     
@@ -248,6 +274,16 @@ def f1_score(predictions, ground_truth):
 
     return pd.Series(f1_scores)
 
+
+def mape(electric1, electric2):
+    '''
+    This function calculates the mean average percentage error used for 
+    forecasting. It takes to electric as input, whose powerflow function
+    it uses.
+    '''
+    pass 
+
+    
 
 ##### FUNCTIONS BELOW THIS LINE HAVE NOT YET BEEN CONVERTED TO NILMTK v0.2 #####
 

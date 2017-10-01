@@ -36,7 +36,7 @@ class DropoutRateResults(Results):
             self._data['n_samples'].loc[i] += other._data['n_samples'].loc[i]
 
     def to_dict(self):
-        return {'statistics': {'dropout_rate': self.combined()}}
+        return {'statistics': {'dropout_rate': self}}#.combined()}}
 
     def plot(self, ax=None):
         if ax is None:

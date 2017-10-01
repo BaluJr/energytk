@@ -10,7 +10,7 @@ import numpy as np
 from hmmlearn import hmm
 
 from nilmtk.feature_detectors import cluster
-from nilmtk.disaggregate import Disaggregator
+from nilmtk.disaggregate import SupervisedDisaggregator
 
 # Python 2/3 compatibility
 from six import iteritems
@@ -174,7 +174,7 @@ def decode_hmm(length_sequence, centroids, appliance_list, states):
     return [hmm_states, hmm_power]
 
 
-class FHMM(Disaggregator):
+class FHMM(SupervisedDisaggregator):
     """
     Attributes
     ----------
@@ -408,7 +408,7 @@ class FHMM(Disaggregator):
 
             # Copy mains data to disag output
             output_datastore.append(key=mains_data_location,
-                                    value=pd.DataFrame(chunk, columns=cols))
+                                    value=pd.DataFrame(chunk, columns=cols, dtype="float32"))
 
         if data_is_available:
             self._save_metadata_for_disaggregation(

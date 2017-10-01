@@ -15,7 +15,7 @@ import numpy as np
 from datetime import timedelta
 import gc
 import pytz
-
+from .meterseries import MeterSeries
 from .timeframe import TimeFrame
 from .measurement import select_best_ac_type
 from .utils import (offset_alias_to_seconds, convert_to_timestamp,
@@ -28,9 +28,18 @@ from nilmtk.appliance import DEFAULT_ON_POWER_THRESHOLD
 
 MAX_SIZE_ENTROPY = 10000
 
-class Electric(object):
-    """Common implementations of methods shared by ElecMeter and MeterGroup.
+class Electric(MeterSeries):
     """
+    Todo: 
+    - Die Superklasse MeterSeries hatte ich eingefuehrt. Funktioniert das so wie geplant?
+    - Aber momentan benutze ich das ja nicht, da ich die externen daten auch einfach in der Struktur der 
+        ElecMeters speichere
+    - Bisher habe ich aber nur laod_series hochkopiert
+
+    Common implementations of methods shared by ElecMeter and MeterGroup.
+    """
+
+    #region ACTIVATION FUNCTIONS
     def when_on(self, on_power_threshold=None, **load_kwargs):
         """Are the connected appliances appliance is on (True) or off (False)?
 
@@ -68,6 +77,8 @@ class Electric(object):
 
     def min_off_duration(self):
         return self._aggregate_metadata_attribute('min_off_duration')
+    #endregion
+
 
     def _aggregate_metadata_attribute(self, attr, agg_func=np.max,
                                       default_value=0,
@@ -610,37 +621,7 @@ class Electric(object):
         warn("`available_power_ac_types` is deprecated.  Please use"
              " `available_ac_types('power')` instead.", DeprecationWarning)
         return self.available_ac_types('power')
-
-    def load_series(self, **load_kwargs):
-        """
-        Parameters
-        ----------
-        ac_type : str
-        physical_quantity : str
-            We sum across ac_types of this physical quantity.
-        **load_kwargs : passed through to load().
-
-        Returns
-        -------
-        generator of pd.Series.  If a single ac_type is found for the
-        physical_quantity then the series.name will be a normal tuple.
-        If more than 1 ac_type is found then the ac_type will be a string
-        of the ac_types with '+' in between.  e.g. 'active+apparent'.
-        """
-        # Pull data through preprocessing pipeline
-        physical_quantity = load_kwargs['physical_quantity']
-        generator = self.load(**load_kwargs)
-        for chunk in generator:
-            if chunk.empty:
-                yield chunk
-                continue
-            chunk_to_yield = chunk[physical_quantity].sum(axis=1)
-            ac_types = '+'.join(chunk[physical_quantity].columns)
-            chunk_to_yield.name = (physical_quantity, ac_types)
-            chunk_to_yield.timeframe = getattr(chunk, 'timeframe', None)
-            chunk_to_yield.look_ahead = getattr(chunk, 'look_ahead', None)
-            yield chunk_to_yield
-
+    
     def power_series(self, **load_kwargs):
         """Get power Series.
 
@@ -818,6 +799,10 @@ class Electric(object):
         return activations
 
 
+
+
+
+#region GLOBAL SPACE HELP FUNCTIONS
 def align_two_meters(master, slave, func='power_series'):
     """Returns a generator of 2-column pd.DataFrames.  The first column is from
     `master`, the second from `slave`.
@@ -914,7 +899,7 @@ def get_activations(chunk, min_off_duration=0, min_on_duration=0,
     when_on = chunk >= on_power_threshold
 
     # Find state changes
-    state_changes = when_on.astype(np.int8).diff()
+    state_changes = when_on.astype(np.float32).diff() # Removes the problem and is still working.
     del when_on
     switch_on_events = np.where(state_changes == 1)[0]
     switch_off_events = np.where(state_changes == -1)[0]
@@ -977,3 +962,4 @@ def get_vampire_power(power_series):
     # power_series.min() in case we get round to building
     # a better vampire power function!
     return power_series.min()
+#endregion

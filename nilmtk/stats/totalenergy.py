@@ -25,7 +25,7 @@ class TotalEnergy(Node):
         max_sample_period = metadata['device']['max_sample_period']
         for chunk in self.upstream.process():
             energy = get_total_energy(chunk, max_sample_period)
-            self.results.append(chunk.timeframe, energy)
+            self.results.append(chunk.timeframe, energy)   ## AHHHHHHHHH!!! Hier werden die Results nur angehangen aber noch kein Result Objekt gebaut! DOCH!
             yield chunk
 
     def required_measurements(self, state):
@@ -80,6 +80,10 @@ def get_total_energy(df, max_sample_period):
 
 def _energy_for_power_series(series, max_sample_period):
     """
+    Returns the energy for a power series. Considers the 
+    max_sample_period, sothat there is no energy aggregated 
+    in sections with missing samples.
+
     Parameters
     ----------
     series : pd.Series

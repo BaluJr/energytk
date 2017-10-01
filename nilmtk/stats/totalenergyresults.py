@@ -32,7 +32,7 @@ class TotalEnergyResults(Results):
                 self._data[ac_type].loc[i] += other._data[ac_type].loc[i]
 
     def to_dict(self):
-        return {'total_energy': self.combined().to_dict()}
+        return {'total_energy': self.to_dict()} #.combined().to_dict()}
 
     def simple(self):
         return self.combined()

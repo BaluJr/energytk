@@ -48,7 +48,7 @@ from sklearn.cluster import KMeans, AgglomerativeClustering
 import sklearn.metrics
 
 # Packages from nilmtk
-from nilmtk.disaggregate import Disaggregator
+from nilmtk.disaggregate import UnsupervisedDisaggregator
 from nilmtk.feature_detectors.cluster import hart85_means_shift_cluster
 from nilmtk.feature_detectors.steady_states import find_steady_states_transients
 
@@ -59,7 +59,7 @@ np.random.seed(SEED)
 
 
 
-class CustomBaranski(Disaggregator):
+class CustomBaranski(UnsupervisedDisaggregator):
     """ Customized Baranski Algorithm.
     Allows multiple states per machine and additionally supports 
     multiple states.
@@ -85,70 +85,9 @@ class CustomBaranski(Disaggregator):
 
     #region All disaggregator functions which are not used at the moment 
 
-    # Momentan wird das nicht gebraucht da unsupervised
-    def train(self, metergroup, cols=[('power', 'active')],
-              buffer_size=20, noise_level=70, state_threshold=15,
-              min_tolerance=100, percent_tolerance=0.035,
-              large_transition=1000, **kwargs):
-        """
-        Train using Hart85. Places the learnt model in `model` attribute.
-
-        Parameters
-        ----------
-        metergroup : a nilmtk.MeterGroup object
-        cols: nilmtk.Measurement, should be one of the following
-            [('power','active')]
-            [('power','apparent')]
-            [('power','reactive')]
-            [('power','active'), ('power', 'reactive')]
-        buffer_size: int, optional
-            size of the buffer to use for finding edges
-        min_tolerance: int, optional
-            variance in power draw allowed for pairing a match
-        percent_tolerance: float, optional
-            if transition is greater than large_transition,
-            then use percent of large_transition
-        large_transition: float, optional
-            power draw of a Large transition
-        """
-        raise NotImplementedError("Muss ich ggf noch mal von den anderen Klassen herkopieren.")
-    
-    # Momentan wird das nicht gebraucht da unsupervised
-    def train_on_chunk(self, chunk, meter):
-        """Signature is fine for site meter dataframes (unsupervised
-        learning). Would need to be called for each appliance meter
-        along with appliance identifier for supervised learning.
-        Required to be overridden to provide out-of-core
-        disaggregation.
-
-        Parameters
-        ----------
-        chunk : pd.DataFrame where each column represents a
-            disaggregated appliance
-        meter : ElecMeter for this chunk
-        """
-        raise NotImplementedError("Muss ich ggf noch mal von den anderen Klassen herkopieren.")
-
-    # Im Moment auch nicht benutzt, da ich direkt alles auf einmal deaggregiere
-    def disaggregate_chunk(self, chunk, prev, transients):
-        """
-        Parameters
-        ----------
-        chunk : pd.DataFrame
-            mains power
-        prev
-        transients : returned by find_steady_state_transients
-
-        Returns
-        -------
-        states : pd.DataFrame
-            with same index as `chunk`.
-        """
-        raise NotImplementedError("Muss ich ggf noch mal von den anderen Klassen herkopieren.")
-
-
     def export_model(self, filename):
         raise NotImplementedError("Muss ich ggf noch mal von den anderen Klassen herkopieren.")
+
 
     def import_model(self, filename):
         raise NotImplementedError("Muss ich ggf noch mal von den anderen Klassen herkopieren.")
@@ -166,18 +105,21 @@ class CustomBaranski(Disaggregator):
         self.state_threshold = 15
         self.max_num_clusters = 12 # from matlab project
 
-    def disaggregate(self, mains, output_datastore, **load_kwargs):
-        """Disaggregate mains according to the model learnt previously.
+    
+    def train(self, metergroup, **load_kwargs):
+        """ Gets a site meter and trains the model based on it. 
+        Goes chunkwise through the dataset and returns the events.
+        In the end does a clustering for identifying the events.
+        For signature description see basic class: It should get a sitemeter for unsupervised learning.
 
         Parameters
         ----------
-        mains : nilmtk.ElecMeter or nilmtk.MeterGroup => In facts the 3 phases
-        output_datastore : instance of nilmtk.DataStore subclass
-            For storing power predictions from disaggregation algorithm. => Wird in einem 2. Step benutzt 
-        **load_kwargs : key word arguments
-            Passed to `mains.power_series(**kwargs)`
+        metergroup : a nilmtk.MeterGroup object
+        For custom baranski (is unsupervised), this is a single site meter.
         """
         
+        # Go through all parts and extract events
+        events = []
         # 1. Get Events (Das ist ja schon vorhanden) -> Das sollte ich ausbauen -> GetSignatures
         # -> man separiert in die verschiedenen moeglichen Signaturen
         # --> Einen Separator als Oberklasse, Dann mehrere Separatoren fuer die einzelnen Typen an Effekt 
@@ -193,38 +135,78 @@ class CustomBaranski(Disaggregator):
         # --> Jede Signatur hat eigene spezielle Eigenschaften
         # --> Einige sollten eine Wildcard beinhalten
         # Ich will hier ein 3d Pandas aufbauen
-        events = self._load_if_available()
-        if events is None:
-            events = pd.DataFrame()
-            for instanceNumber in range(1, len(mains.all_meters())+1):
-                elec = mains[instanceNumber]    
-                print("Find Events for " + str(elec.metadata))
-                transitions = find_steady_states_transients(
-                    elec, cols=self.cols, state_threshold=self.state_threshold,
-                    noise_level=self.noise_level, sample_period = 2, **load_kwargs)[1]
-                transitions['type'] = transitions >= 0
-                transitions['meter'] = instanceNumber
-                events = events.append(transitions)
-            events.index.rename('time', inplace=True)
-            events.set_index(['type', 'meter'], append=True, inplace=True)
-            events.reorder_levels([2,1,0])
-            events.sort_index()
-            self._save(events)
+        #events = self._load_if_available()
+        #if not events is None:
+        #    self.events = events
+        #    return
+
+        events = pd.DataFrame()
+        for i, elec in enumerate(metergroup.all_meters()):
+            print("Find Events for " + str(elec.metadata))
+            transitions = find_steady_states_transients(
+                elec, cols=self.cols, state_threshold=self.state_threshold,
+                noise_level=self.noise_level, **load_kwargs)[1]
+            # Mark as on- or off-event
+            transitions['type'] = transitions >= 0
+            transitions['meter'] = elec
+            events = events.append(transitions)
+
+        events.index.rename('time', inplace=True)
+        events.set_index(['type', 'meter'], append=True, inplace=True)
+        events = events.reorder_levels([2,1,0])
+        events.sort_index(inplace=True)
         # Hier vielleicht noch die Kombinationen finden
+        self.events = events
+        
+        #self._save(events)
 
 
+  
         # 2. Cluster the events using different cluster methodologies (Zuweisung passiert automatisch)
         # Ah es gibt doch ein predict: Und zwar elemente Clustern zuweisen        
-        clusters = self._load_if_available(what='cluster')
+        clusters = None #self.  _load_if_available(what='cluster')
         if clusters is None:
             for curGroup, groupEvents in events.groupby(['meter','type']):
                 centroids, assignments = self._cluster_events(groupEvents, max_num_clusters=self.max_num_clusters, method='kmeans')
                 events.loc[curGroup,'cluster'] = assignments  
-            self._save(events, 'cluster')
+            #self._save(events, 'cluster')
         else:
-            events = clusters
+            pass
+            #events = clusters
+
+        self.model = events
         
 
+
+    
+    def train_on_chunk(self, chunk):
+        """ 
+        This function is actually not needed as the chunkwise processing is included inside the find_steady_states_transients function.
+        This function goes through the power line and already identifies the events.
+        For signature description see basic class: Only gets the chunk from the sitemeter, as it is unsupervised.
+
+        Parameters
+        ----------
+        chunk : pd.DataFrame where each column represents a
+            disaggregated appliance
+        meter : ElecMeter for this chunk
+        """
+        pass
+
+    def disaggregate(self, mains, output_datastore, **load_kwargs):
+        """Disaggregate mains according to the model learnt previously.
+        At the moment not used as we use the predict function in the main 
+        script.
+
+        Parameters
+        ----------
+        mains : nilmtk.ElecMeter or nilmtk.MeterGroup => In facts the 3 phases
+        output_datastore : instance of nilmtk.DataStore subclass
+            For storing power predictions from disaggregation algorithm. => Wird in einem 2. Step benutzt 
+        **load_kwargs : key word arguments
+            Passed to `mains.power_series(**kwargs)`
+        """
+        
         # 3. Generate Finite State Machines (Test whether clustering fits)
         # 4. Bildender Sequenzen fuer jede State machine
         for meter, content in clusters.groupby(level=0):
@@ -294,10 +276,27 @@ class CustomBaranski(Disaggregator):
                 num_meters=len(self.centroids)
             )
     
-    #endregion
+    
 
-    def rollingFunction(*args, **kwargs):
-        i = 0
+    def disaggregate_chunk(self, chunk, prev, transients):
+        """
+        Parameters
+        ----------
+        chunk : pd.DataFrame
+            mains power
+        prev
+        transients : returned by find_steady_state_transients
+
+        Returns
+        -------
+        states : pd.DataFrame
+            with same index as `chunk`.
+        """
+        raise NotImplementedError("Muss ich ggf noch mal von den anderen Klassen herkopieren.")
+
+
+
+    #endregion
 
     #region machine learning functionality help functions
     
@@ -336,6 +335,10 @@ class CustomBaranski(Disaggregator):
         if exact_num_clusters is not None:
             labels, centers = _apply_clustering_n_clusters(clusteringInput, exact_num_clusters, method)
             return centers.flatten()
+
+        # Special case:
+        if len(events) == 1: 
+            return np.array([events.iloc[0]["active transition"]]), np.array([0])
 
         # If exact cluster number not specified, use cluster validity measures to find optimal number
         for n_clusters in range(2, max_num_clusters):

@@ -25,7 +25,7 @@ def find_steady_states_transients(metergroup, cols, noise_level,
     steady_states_list = []
     transients_list = []
 
-    for power_df in metergroup.load(cols=cols, **load_kwargs):
+    for power_df in metergroup.load(cols=cols, **load_kwargs): # Load brings it also to a single powerline
         """
         if len(power_df.columns) <= 2:
             # Use whatever is available
@@ -113,6 +113,9 @@ def find_steady_states(dataframe, min_n_samples=2, state_threshold=15,
         # Elementwise absolute differences
         state_change = np.fabs(
             np.subtract(this_measurement, previous_measurement))
+        
+        #if i < 10:
+        #    print('i: ' + str(state_change))
         # logging.debug('The State Change is: %s' % (stateChange,))
 
         if np.sum(state_change > state_threshold):
@@ -135,6 +138,7 @@ def find_steady_states(dataframe, min_n_samples=2, state_threshold=15,
 
                 # Avoid outputting first transition from zero
                 index_transitions.append(curTime)
+                
                 # logging.debug('The current row curTime is: %s' % (curTime))
                 transitions.append(last_transition)
 
@@ -182,7 +186,7 @@ def find_steady_states(dataframe, min_n_samples=2, state_threshold=15,
     # than the noise threshold
     #  https://github.com/nilmtk/nilmtk/issues/400
 
-    if np.sum(steady_states[0] > noise_level) and index_transitions[0] == index_steady_states[0] == dataframe.iloc[0].name:
+    if len(steady_states)>0 and np.sum(steady_states[0] > noise_level) and index_transitions[0] == index_steady_states[0] == dataframe.iloc[0].name:
         transitions = transitions[1:]
         index_transitions = index_transitions[1:]
         steady_states = steady_states[1:]
@@ -200,21 +204,21 @@ def find_steady_states(dataframe, min_n_samples=2, state_threshold=15,
                    2: ['active average', 'reactive average']}
 
     
-    if len(index_transitions) == 0:
-        # No events
-        return pd.DataFrame(), pd.DataFrame()
-    else:
-        transitions = pd.DataFrame(data=transitions, index=index_transitions,
-                                   columns=cols_transition[num_measurements])
-        print("Transition frame created.")
+    #if len(index_transitions) == 0:
+    #    # No events
+    #    return pd.DataFrame(), pd.DataFrame()
+    #else:
+    transitions = pd.DataFrame(data=transitions, index=index_transitions,
+                                columns=cols_transition[num_measurements])
+    print("Transition frame created.")
 
-        print("Creating states frame ...")
-        sys.stdout.flush()
-        steady_states = pd.DataFrame(data=steady_states, index=index_steady_states,
-                                     columns=cols_steady[num_measurements])
-        print("States frame created.")
-        print("Finished.")
-        return steady_states, transitions
+    print("Creating states frame ...")
+    sys.stdout.flush()
+    steady_states = pd.DataFrame(data=steady_states, index=index_steady_states,
+                                    columns=cols_steady[num_measurements])
+    print("States frame created.")
+    print("Finished.")
+    return steady_states, transitions
 
 
 def cluster(x, max_num_clusters=3):

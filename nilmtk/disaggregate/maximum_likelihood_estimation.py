@@ -2,14 +2,14 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 from ..timeframe import merge_timeframes, TimeFrame
-from .disaggregator import Disaggregator
+from nilmtk.disaggregate import SupervisedDisaggregator
 from matplotlib import pyplot as plt
 from datetime import timedelta
 from scipy.stats import poisson, norm
 from sklearn import mixture
 
 
-class MLE(Disaggregator):
+class MLE(SupervisedDisaggregator):
 
     """
     Disaggregation of a single appliance based on its features and

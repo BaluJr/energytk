@@ -10,7 +10,7 @@ class ClusterModel(object):
     As for the ther classes this model contains the paramters and 
     the models.
     '''
-    parameters = {}
+    #parameters = {}
 
 
 class Clusterer(Processing):
@@ -51,6 +51,8 @@ class Clusterer(Processing):
     model_class = None
         
     def __init__(self, model):
+        super(Clusterer, self).__init__()
+
         if model == None:
             model = self.model_class();
         self.model = model;

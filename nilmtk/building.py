@@ -27,6 +27,7 @@ class Building(Hashable):
         '''
         Import metadata. Called during startup.
         '''
+        # Temporary Hack: Todo 
         self.metadata = store.load_metadata(key)
         if 'dataset' not in self.metadata:
             self.metadata['dataset'] = dataset_name

@@ -19,7 +19,7 @@ class DropoutRate(Node):
             dropout_rate = get_dropout_rate(chunk, sample_period)
             self.results.append(chunk.timeframe, 
                                 {'dropout_rate': dropout_rate,
-                                 'n_samples': len(chunk)})
+                                 'n_samples': len(chunk)}, check_overlap = False)
             yield chunk
 
 

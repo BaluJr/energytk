@@ -1,8 +1,8 @@
 from statsmodels.tsa.arima_model import ARIMA
 import cntk as C
 import numpy as np
-from .forecaster import Forecaster
 from pandas import DataFrame
+from .clusterer import Clusterer
 
 class CorrelationClustererModel(object):
     params = {
@@ -17,53 +17,11 @@ class CorrelationClustererModel(object):
         # To create a 24 hour forecasting series the amount_of_models has to be 
         # set to 96.
         'amount_of_models': 1,
-
-        # Architecture of the ANN
-        'num_hidden_layers': 2,
-        'hidden_layers_dim': 2,
-
-        # How many errors are taken together until training step
-        'size_minibatches': 100,
-
-        # Define output
-        'training_progress_output_freq': 1,
-
-        # How often each minibatch is trained
-        'num_passes': 100
     }
 
-    
-    '''
-    Data of the progress during training the minibatches. 
-    '''
-    plotdata = {"batchsize":[], "loss":[], "error":[]}
-
-    def plot_training_progress():
-        ''' 
-        This method plots the training progress which has been recorded during training.
-        '''
-
-        plt.figure(1)
-        plt.subplot(211)
-        plt.plot(plotdata["batchsize"], plotdata["loss"], 'b--')
-        plt.xlabel('Minibatch number')
-        plt.ylabel('Loss')
-        plt.title('Minibatch run vs. Training loss ')
-        plt.show()
-
-        plt.subplot(212)
-        plt.plot(plotdata["batchsize"], plotdata["error"], 'r--')
-        plt.xlabel('Minibatch number')
-        plt.ylabel('Label Prediction Error')
-        plt.title('Minibatch run vs. Label Prediction Error ')
-        plt.show()
 
 
-
-
-
-
-class CorrelationClusterer(Forecaster):
+class CorrelationClusterer(Clusterer):
     """
     This is disaggregator which clusters all meters by their correlation 
     towards each other. That means, that meters with similar powerflows will
@@ -75,14 +33,14 @@ class CorrelationClusterer(Forecaster):
     """
 
     # The related model
-    model_class = AnnForecasterModel
+    model_class = CorrelationClustererModel
 
     def __init__(self, model = None):
         """
         Constructor of this class which takes an optional model as input.
         If no model is given, it createsa default one.
         """
-        super(AnnForecaster, self).__init__(model)
+        super(CorrelationClusterer, self).__init__(model)
 
         
     def train(self, meters):

@@ -5,7 +5,7 @@ import pandas as pd
 from nilmtk.feature_detectors.cluster import hart85_means_shift_cluster
 from nilmtk.feature_detectors.steady_states import (
     find_steady_states_transients)
-from nilmtk.disaggregate import Disaggregator
+from nilmtk.disaggregate import SupervisedDisaggregator
 
 
 # Fix the seed for repeatability of experiments
@@ -20,7 +20,7 @@ class MyDeque(deque):
         self.rotate(-pos)
         ret = self.popleft()
         self.rotate(pos)
-        return ret
+        return ret 
 
 
 class PairBuffer(object):
@@ -180,10 +180,8 @@ class PairBuffer(object):
 
                                 # Append the OFF transition to the ON. Add to
                                 # dataframe.
-                                matchedpair = val[
-                                              0:self._num_measurements] + compval[0:self._num_measurements]
-                                self.matched_pairs.loc[
-                                    len(self.matched_pairs)] = matchedpair
+                                matchedpair = val[0:self._num_measurements] + compval[0:self._num_measurements]
+                                self.matched_pairs.loc[len(self.matched_pairs),:] = matchedpair
 
                     # Iterate Index
                     idx += 1
@@ -193,7 +191,8 @@ class PairBuffer(object):
         return pairmatched
 
 
-class Hart85(Disaggregator):
+
+class Hart85(SupervisedDisaggregator):
     """1 or 2 dimensional Hart 1985 algorithm.
 
     Attributes
@@ -203,12 +202,16 @@ class Hart85(Disaggregator):
         or a tuple of instances for a MeterGroup.
         Each value is a sorted list of power in different states.
     """
+    Requirements = {
+        'max_sample_period': 10,
+        'physical_quantities': [['power','active']]
+    }
 
     def __init__(self):
         self.model = {}
         self.MODEL_NAME = "Hart85"
 
-    def train(self, metergroup, cols=[('power', 'active')],
+    def train(self, metergroup, cols=[('power','active')],
               buffer_size=20, noise_level=70, state_threshold=15,
               min_tolerance=100, percent_tolerance=0.035,
               large_transition=1000, **kwargs):
@@ -233,6 +236,9 @@ class Hart85(Disaggregator):
         large_transition: float, optional
             power draw of a Large transition
         """
+        
+        metergroup = metergroup.sitemeters() # Only the main elements are interesting
+
         self.cols = cols
         self.state_threshold = state_threshold
         self.noise_level = noise_level
@@ -241,16 +247,17 @@ class Hart85(Disaggregator):
         self.pair_df = self.pair(
             buffer_size, min_tolerance, percent_tolerance, large_transition)
         self.centroids = hart85_means_shift_cluster(self.pair_df, cols)
+        self.model = "SET" # Sothat check is fullfilled
 
     def pair(self, buffer_size, min_tolerance, percent_tolerance,
-             large_transition):
-        subset = list(self.transients.itertuples())
+             large_transition): 
+        #subset = list(self.transients.itertuples())
         buffer = PairBuffer(
             min_tolerance=min_tolerance, buffer_size=buffer_size,
             percent_tolerance=percent_tolerance,
             large_transition=large_transition,
             num_measurements=len(self.transients.columns) + 1)
-        for s in subset:
+        for s in self.transients.itertuples(): #subset:
             # if len(buffer.transitionList) < bsize
             if len(buffer.transition_list) == buffer_size:
                 buffer.clean_buffer()
@@ -374,7 +381,7 @@ class Hart85(Disaggregator):
             # print(power.sum())
         return di
 
-    def disaggregate(self, mains, output_datastore, **load_kwargs):
+    def disaggregate(self, mains, output_datastore = None, **load_kwargs):
         """Disaggregate mains according to the model learnt previously.
 
         Parameters
@@ -387,7 +394,7 @@ class Hart85(Disaggregator):
         **load_kwargs : key word arguments
             Passed to `mains.power_series(**kwargs)`
         """
-        load_kwargs = self._pre_disaggregation_checks(load_kwargs)
+        load_kwargs = self._pre_disaggregation_checks(mains, load_kwargs)
 
         load_kwargs.setdefault('sample_period', 60)
         load_kwargs.setdefault('sections', mains.good_sections())
@@ -411,6 +418,7 @@ class Hart85(Disaggregator):
             prev[meter] = -1
 
         timeframes = []
+        disaggregation_overall = None
         # Now iterating over mains data and disaggregating chunk by chunk
         for chunk in mains.power_series(**load_kwargs):
             # Record metadata
@@ -421,26 +429,34 @@ class Hart85(Disaggregator):
 
             cols = pd.MultiIndex.from_tuples([chunk.name])
 
-            for meter in learnt_meters:
-                data_is_available = True
-                df = power_df[[meter]]
-                df.columns = cols
-                key = '{}/elec/meter{:d}'.format(building_path, meter + 2)
-                output_datastore.append(key, df)
+            if output_datastore != None:
+                for meter in learnt_meters:
+                    data_is_available = True
+                    df = power_df[[meter]]
+                    df.columns = cols
+                    key = '{}/elec/meter{:d}'.format(building_path, meter + 2) # Weil 0 nicht gibt und Meter1 das undiaggregierte ist und 
+                    output_datastore.append(key, df)
+                output_datastore.append(key=mains_data_location,
+                                    value=pd.DataFrame(chunk, columns=cols))  # Das Main wird auf Meter 1 gesetzt.
+            else:
+                if disaggregation_overall is None:
+                    disaggregation_overall = power_df
+                else:
+                    disaggregation_overall = disaggregation_overall.append(power_df)
 
-            output_datastore.append(key=mains_data_location,
-                                    value=pd.DataFrame(chunk, columns=cols))
-
-        if data_is_available:
-            self._save_metadata_for_disaggregation(
-                output_datastore=output_datastore,
-                sample_period=load_kwargs['sample_period'],
-                measurement=measurement,
-                timeframes=timeframes,
-                building=mains.building(),
-                supervised=False,
-                num_meters=len(self.centroids)
-            )
+        if output_datastore != None:
+            if data_is_available:
+                self._save_metadata_for_disaggregation(
+                    output_datastore=output_datastore,
+                    sample_period=load_kwargs['sample_period'],
+                    measurement=measurement,
+                    timeframes=timeframes,
+                    building=mains.building(),
+                    supervised=False,
+                    num_meters=len(self.centroids)
+                )
+        else:
+            return disaggregation_overall
 
     """
     def export_model(self, filename):

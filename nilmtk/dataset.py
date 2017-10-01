@@ -47,6 +47,8 @@ class DataSet(object):
 
     def import_metadata(self, store):
         """
+        Import metadata. Called during startup.
+
         Parameters
         ----------
         store : nilmtk.DataStore
@@ -55,6 +57,15 @@ class DataSet(object):
         self.metadata = store.load_metadata()
         self._init_buildings(store)
         return self
+
+
+    def update_metadata(self, new_metadata):
+        '''
+        Hardly updates the metadata of the dataset. Pay 
+        attention, no validity checking performed.
+        '''
+        self.store.update_root_metadata(new_metadata)
+
 
     def save(self, destination):
         for b_id, building in iteritems(self.buildings):
@@ -141,9 +152,31 @@ class DataSet(object):
         return axes
 
     def elecs(self):
+        '''
+        Returns a list of all elecs of all buildings.
+        '''
         return [building.elec for building in self.buildings.values()]
+    
+    def calc_and_cache_stats(self, ignore_meters = None, verbose = False):
+        '''
+        This functo assures that the statistics are calculated and 
+        available for all meters after this call. They are then 
+        stored in the cache and can be accessed without delay 
+        afterwards.
+        Does not recalculate stats, which were already in cache.
+
+        ignore_meters: This list of meters makes it possible to ignore 
+                       several meters while calculating the statistics.
+        '''
+        for elec in self.elecs():
+            elec.calc_and_cache_stats(ignore_meters=ignore_meters, verbose=verbose)
+
 
     def clear_cache(self):
+        '''
+        This function removes the precalculated stat information
+        for all elements.
+        '''
         for elec in self.elecs():
             elec.clear_cache()
 
@@ -159,7 +192,10 @@ class DataSet(object):
         return axes
 
     def get_activity_script(self, filename):
-        """Extracts an activity script from this dataset.
+        """Extracts an activity script for the appliances of this 
+        dataset, based on the available submeters.
+        The result is a series with the timestamp as index and 
+        true for switch-on and false for switch-off.
 
         Saves the activity script to an HDF5 file.
         Keys in the HDF5 file take the form:
@@ -208,3 +244,4 @@ class DataSet(object):
                 del starts, ends
 
         store.close()
+

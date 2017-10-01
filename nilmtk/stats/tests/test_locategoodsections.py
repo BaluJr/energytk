@@ -46,7 +46,7 @@ class TestLocateGoodSections(unittest.TestCase):
                 source_node = meter.get_source_node(**load_kwargs)
                 good_sections = GoodSections(source_node)
                 good_sections.run()
-                combined = good_sections.results.simple()
+                combined = good_sections.results#.simple()
                 meter.clear_cache()
                 meter.good_sections(**load_kwargs)
                 meter.good_sections(**load_kwargs)
@@ -72,7 +72,7 @@ class TestLocateGoodSections(unittest.TestCase):
         locate = GoodSections()
         locate.results = GoodSectionsResults(MAX_SAMPLE_PERIOD)
         locate._process_chunk(df, metadata)
-        results = locate.results.combined()
+        results = locate.results#.combined()
         self.assertEqual(len(results), 4)
         self.assertAlmostEqual(results[0].timedelta.total_seconds(), 30)
         self.assertEqual(results[1].timedelta.total_seconds(), 10)
@@ -103,7 +103,7 @@ class TestLocateGoodSections(unittest.TestCase):
                 prev_i = i
                 locate._process_chunk(cropped_df, metadata)
 
-            results = locate.results.combined()
+            results = locate.results#.combined()
             self.assertEqual(len(results), 4)
             self.assertAlmostEqual(results[0].timedelta.total_seconds(), 30)
             self.assertEqual(results[1].timedelta.total_seconds(), 10)
