@@ -134,6 +134,14 @@ class TimeFrameGroup():
 
         #return new_tfg
 
+    def merge_shorter_gaps_than(self, threshold):
+        gap_larger = ((self._df["section_start"].shift(-1) - self._df["section_end"]) > threshold)
+        gap_larger.iloc[-1] = True # keep last
+        relevant_starts = self._df[["section_start"]][gap_larger.shift(1).fillna(True)].reset_index(drop=True)
+        relevant_ends = self._df[["section_end"]][gap_larger].reset_index(drop=True)
+        pd.concat([relevant_starts, relevant_ends], axis=1)
+
+
     def invert(self, start = None, end = None):
         ''' 
         Returns a TimeFrameGroup with inverted rectangles.
@@ -141,8 +149,8 @@ class TimeFrameGroup():
         TimeFrame and vice versa.
         '''
 
-        self._df['section_end'] = self._df['section_end'].shift(1).dropna()
-        self._df.rename(columns={"section_end":"section_start", "section_start": "section_end"})
+        self._df['section_end'] = self._df['section_end'].shift(1)
+        self._df = self._df.dropna().rename(columns={"section_end":"section_start", "section_start": "section_end"})
 
         #if not(start is None and end is None):
         #    raise Exception("Not implemented yet")
