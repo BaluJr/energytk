@@ -67,6 +67,11 @@ class TimeFrameGroup():
             ax.add_patch(rect)
         return ax
 
+    
+    def plot_deltahistogram(self, bins = 10):
+        (self._df['section_end'] - self._df['section_start']).apply(lambda e: e.total_seconds()).hist(bins=bins)
+
+
     def intersection(self, other):
         """Returns a new TimeFrameGroup of self masked by other.
 
@@ -77,7 +82,7 @@ class TimeFrameGroup():
                intersection():  |---##-----##-----------###|
         """
         assert isinstance(other, (TimeFrameGroup, list))
-        return self.intersect_many(list(self, other))
+        return TimeFrameGroup.intersect_many([self, other])
 
         #my = self._df
         #its = other._df

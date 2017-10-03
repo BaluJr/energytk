@@ -10,7 +10,7 @@ from .building import Building
 from .datastore.datastore import join_key
 from .utils import get_datastore
 from .timeframe import TimeFrame
-
+from nilmtk import MeterGroup
 
 class DataSet(object):
     """
@@ -118,7 +118,7 @@ class DataSet(object):
         axes : list of axes or None.
             If None then they will be generated.
         load_kwargs: arguments passed to loading
-        plot_kwargs: arguments passed to plotting
+        plot_kwargs: arguments passed to plotting   
         Returns
         -------
         axes : list of axes
@@ -245,3 +245,10 @@ class DataSet(object):
 
         store.close()
 
+
+    def all_elecmeters(self):
+        elec_meters = []
+        for cur in self.elecs():
+            elec_meters.extend(cur.all_elecmeters())
+        all = MeterGroup(elec_meters)
+        return all

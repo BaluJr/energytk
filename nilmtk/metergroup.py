@@ -312,7 +312,7 @@ class MeterGroup(Electric):
                 return True
         return False
 
-    def select(self, elecmeters_only = False, include_building_in_check = False, **select_kwargs):
+    def select(self, elecmeters_only = False, **select_kwargs):
         """Select a group of meters based on meter metadata.
 
         e.g.
@@ -364,13 +364,13 @@ class MeterGroup(Electric):
         Parameters:
         # elecmeters_only: bool
         #   When set to true, only the contained atomar elecmeters are returned.
-        # Todo: Think about whether it might be necessary to allow exclusion of building metadata
+        # Todo: Think about whether it might be necessary to allow exclusion of checking the building metadata. I added this check.
         # include_buildings_in_check: bool
         #    Wheather the meters' corresponding building is also checked.
         # 
         """
         selected_meters = []
-        func = select_kwargs.pop('func', 'matches')
+        func = select_kwargs.pop('func', 'matches') # Second one is the default
 
         def get(select_kwarg):
             exception_raised_every_time = True
@@ -999,11 +999,12 @@ class MeterGroup(Electric):
             #raise("Klappt das wirklich?")
             good_sections = TimeFrameGroup([self.get_timeframe()])
             for meter in self.meters:
-                good_sections = good_sections.intersection(meter.good_sections())
+                tmp = meter.good_sections()
+                good_sections = good_sections.intersection(tmp._data) # HIER DESTSTELLEN WARUM DAS NICHT GEHT. IHM FEHLT ._data, Dann normal disagg, Clustern checken
             return good_sections
             #return self.meters[0].good_sections(**load_kwargs)
         else:
-            return []
+            return TimeFrameGroup()
 
 
     def dataframe_of_meters(self, **load_kwargs):
