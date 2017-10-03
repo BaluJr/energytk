@@ -6,6 +6,7 @@ from datetime import datetime
 from nilmtk.feature_detectors.cluster import hart85_means_shift_cluster
 from nilmtk.feature_detectors.steady_states import find_steady_states_transients
 from nilmtk.disaggregate.accelerators import find_steady_states_transients_fast, pair_fast
+from nilmtk.timeframe import merge_timeframes, TimeFrame
 
 from nilmtk.disaggregate import SupervisedDisaggregator, UnsupervisedDisaggregatorModel
 from functools import reduce, partial
@@ -446,11 +447,6 @@ class EventbasedCombination(SupervisedDisaggregator):
             #    metergroup.meters[i], cols, noise_level, state_threshold, **kwargs)
             #t2 = time.time()
             cols=self.model.params['cols']
-            for power_df in metergroup.meters[0].load(cols=cols, **kwargs): # Load brings it also to a single 
-                power_dataframe = power_df.dropna()
-                indices = np.array(power_dataframe.index)
-                values = np.array(power_dataframe.iloc[:,0])
-
             steady_states, transients = find_steady_states_transients_fast(
                 metergroup.meters[i], cols, model.params['noise_level'], model.params['state_threshold'], **kwargs)
             #t3 = time.time()
@@ -483,11 +479,16 @@ class EventbasedCombination(SupervisedDisaggregator):
         tx2 = []
         model.centroids = []
         for i in range(len(model.transients)):
-            #tx1.append(time.time())
-            #self.centroids.append(hart85_means_shift_cluster(self.pair_df_new[i], cols))
+
+
             tx2.append(time.time())
             model.centroids.append(hart85_means_shift_cluster(model.pair_df_new[i], model.params['cols']))
         t4 = time.time()
+                        
+
+
+
+
 
 
     def pair(self, transients, buffer_size, min_tolerance, percent_tolerance,
@@ -664,7 +665,7 @@ class EventbasedCombination(SupervisedDisaggregator):
         load_kwargs.setdefault('sections', mains.good_sections())
 
         timeframes = []
-        building_path = '/building{}'.format(mains.building())
+        #building_path = '/building{}'.format(mains.building())
         #mains_data_location = building_path + '/elec/meter' + phase
         data_is_available = False
 
@@ -681,60 +682,124 @@ class EventbasedCombination(SupervisedDisaggregator):
         # transients = transients[1:]
 
         # Initially all appliances/meters are in unknown state (denoted by -1)
-        prev = [OrderedDict()] * len(mains)
+        prev = [OrderedDict()] * len(transients)
         
-        timeframes = [[]] * len(mains)
-        disaggregation_overall = [None] * len(mains)
+        # AHHHRG! Hier muss ich irgendwie vorne und hinten eine 0 ergaenzen, damit auf jeden Fall etwas im Storage landet
+        # UND DANN HABE ICH ES!
+
+        timeframes = []
+        disaggregation_overall = [None] * len(transients)
         for phase in range(len(transients)):
+            building_path = '/building{}'.format(mains.building()* 10 + phase)
+            mains_data_location = building_path + '/elec/meter1'
+
             learnt_meters = model.centroids[phase].index.values
             for meter in learnt_meters:
                 prev[phase][meter] = -1
-                
+
             # Now iterating over mains data and disaggregating chunk by chunk
-            for chunk in mains.meters[phase].power_series(**load_kwargs):
+            to_load = mains.meters[i] if i < 3 else mains
+            first = True
+            for chunk in to_load.power_series(**load_kwargs):  # HIER MUSS ICH DOCH UEBER DIE EINZELNEN PHASEN LAUFEN!!!
                 # Record metadata
-                timeframes[phase].append(chunk.timeframe)
-                measurement = chunk.name
+                if phase == 1: # Only add once
+                    timeframes.append(chunk.timeframe)
+                    measurement = chunk.name # gehe davon aus, dass ueberall gleich
                 power_df = self.disaggregate_chunk(
-                    chunk, prev[phase], transients[phase], phase)
+                    chunk, prev[phase], transients[phase], phase) # HAT DEN VORTEIL, DASS ICH MICH AUF DIE GUTEN SECTIONS KONZENTRIEREN KANN
+                if first:
+                    #power_df = pd.DataFrame(0, columns=power_df.columns, index = chunk.index[:1]).append(power_df) # Ich gehe davon aus, dass alle werte ankommen
+                    power_df.iloc[0, :] = 0 
+                    first = False
 
                 cols = pd.MultiIndex.from_tuples([chunk.name])
-                
-                # Die Meter muss ich noch durchiterieren
-                id = str(datetime.now()).replace(" ", "").replace('-', '').replace(":","")
-                id = id[:id.find('.')]
-                keytemplate = '/building{0}/elec/disag/eventbased{1}/meter{2}'
+
                 if output_datastore != None:
                     for meter in learnt_meters:
                         data_is_available = True
-                        df = power_df[[meter]].dropna() # remove the remaining nans
+                        df = power_df[[meter]].dropna()
                         df.columns = cols
-                        key = keytemplate.format(mains.building(), id, phase) + "/appliance{:d}".format(meter + 2) # Weil 0 nicht gibt und Meter1 der remaining powerflow ist
+                        key = '{}/elec/meter{:d}'.format(building_path, meter + 2) # Weil 0 nicht gibt und Meter1 das undiaggregierte ist und 
                         output_datastore.append(key, df)
-         
-                    # Store the remaining powerflow (the power not assigned to any facility) 
-                    df = power_df['rest'].dropna() # remove the remaining nans
+                    df = power_df[['rest']].dropna()
                     df.columns = cols
-                    key = keytemplate.format(mains.building(), id, phase) + "/appliance1"
-                    output_datastore.append(key, df)
-
-                    # Store the metadata
-                    if data_is_available:
-                        self._save_metadata_for_disaggregation(
-                            output_datastore=output_datastore,
-                            key = keytemplate.format(mains.building(), id, phase)
-                        )
-                    
-                    #output_datastore.append(key=mains_data_location,
-                    #                    value=pd.DataFrame(chunk, columns=cols))  # Wir sparen uns den Main noch mal neu zu speichern
+                    output_datastore.append(key=mains_data_location, value= df) #pd.DataFrame(chunk, columns=cols))  # Das Main wird auf Meter 1 gesetzt.
                 else:
-                    if disaggregation_overall[phase] is None:
-                        disaggregation_overall[phase] = power_df
+                    if disaggregation_overall is None:
+                        disaggregation_overall = power_df
                     else:
-                        disaggregation_overall[phase] = disaggregation_overall.append(power_df)
+                        disaggregation_overall = disaggregation_overall.append(power_df)
+        if output_datastore != None:
+            # Write a very last entry. Then at least start and end set
+            df = pd.DataFrame(0., columns = cols, index = chunk.index[-1:])
+            for phase in range(len(transients)):
+                building_path = '/building{}'.format(mains.building()* 10 + phase)
+                for meter in model.centroids[phase].index.values:
+                    key = '{}/elec/meter{:d}'.format(building_path, meter + 2) # Weil 0 nicht gibt und Meter1 das undiaggregierte ist und 
+                    output_datastore.append(key, df) 
+            #output_datastore.append(key, df.rename(columns={0:meter})) Ich gehe davon aus, dass alle Daten rein kommen und ich rest nicht setzen muss
 
-        if output_datastore == None:
+            # Then store the metadata
+            num_meters = [len(cur) + 1 for cur in self.model.centroids] # Add one for the rest
+            if data_is_available:
+                self._save_metadata_for_disaggregation(
+                    output_datastore=output_datastore,
+                    sample_period=load_kwargs['sample_period'],
+                    measurement=measurement,
+                    timeframes=timeframes,
+                    building=mains.building(),
+                    supervised=False,
+                    num_meters = num_meters,
+                    original_building_meta = mains.meters[0].building_metadata
+                )
+        else:
             return disaggregation_overall
+
+        # Der NEUE ANSATZ, den ich mir jetzt dovh verkneife
+        #    for chunk in mains.meters[phase].power_series(**load_kwargs):
+        #        # Record metadata
+        #        timeframes[phase].append(chunk.timeframe)
+        #        measurement = chunk.name
+        #        power_df = self.disaggregate_chunk(
+        #            chunk, prev[phase], transients[phase], phase)
+
+        #        cols = pd.MultiIndex.from_tuples([chunk.name])
+                
+        #        # Die Meter muss ich noch durchiterieren
+        #        id = str(datetime.now()).replace(" ", "").replace('-', '').replace(":","")
+        #        id = id[:id.find('.')]
+        #        keytemplate = '/building{0}/elec/disag/eventbased{1}/meter{2}'
+        #        if output_datastore != None:
+        #            for meter in learnt_meters:
+        #                data_is_available = True
+        #                df = power_df[[meter]].dropna() # remove the remaining nans
+        #                df.columns = cols
+        #                key = keytemplate.format(mains.building(), id, phase) + "/appliance{:d}".format(meter + 2) # Weil 0 nicht gibt und Meter1 der remaining powerflow ist
+        #                output_datastore.append(key, df)
+         
+        #            # Store the remaining powerflow (the power not assigned to any facility) 
+        #            df = power_df['rest'].dropna() # remove the remaining nans
+        #            df.columns = cols
+        #            key = keytemplate.format(mains.building(), id, phase) + "/appliance1"
+        #            output_datastore.append(key, df)
+
+        #            # Store the metadata
+        #            if data_is_available:
+        #                self._save_metadata_for_disaggregation(
+        #                    output_datastore=output_datastore,
+        #                    key = keytemplate.format(mains.building(), id, phase)
+        #                )
+                    
+        #            #output_datastore.append(key=mains_data_location,
+        #            #                    value=pd.DataFrame(chunk, columns=cols))  # Wir sparen uns den Main noch mal neu zu speichern
+        #        else:
+        #            if disaggregation_overall[phase] is None:
+        #                disaggregation_overall[phase] = power_df
+        #            else:
+        #                disaggregation_overall[phase] = disaggregation_overall.append(power_df)
+
+        #if output_datastore == None:
+        #    return disaggregation_overall
 
     """
     def export_model(self, filename):
@@ -780,9 +845,174 @@ class EventbasedCombination(SupervisedDisaggregator):
 
     
 
-    def _save_metadata_for_disaggregation(self, output_datastore, key):
-
+    def _save_metadata_for_disaggregation(self, output_datastore,
+                                          sample_period, measurement,
+                                          timeframes, building,
+                                          meters=None, num_meters=None,
+                                          supervised=True, original_building_meta = None):
         """Add metadata for disaggregated appliance estimates to datastore.
+
+        This method returns nothing.  It sets the metadata
+        in `output_datastore`.
+
+        Note that `self.MODEL_NAME` needs to be set to a string before
+        calling this method.  For example, we use `self.MODEL_NAME = 'CO'`
+        for Combinatorial Optimisation.
+
+        Parameters
+        ----------
+        output_datastore : nilmtk.DataStore subclass object
+            The datastore to write metadata into.
+        sample_period : int
+            The sample period, in seconds, used for both the
+            mains and the disaggregated appliance estimates.
+        measurement : 2-tuple of strings
+            In the form (<physical_quantity>, <type>) e.g.
+            ("power", "active")
+        timeframes : list of nilmtk.TimeFrames or nilmtk.TimeFrameGroup
+            The TimeFrames over which this data is valid for.
+        building : int
+            The building instance number (starting from 1)
+        supervised : bool, defaults to True
+            Is this a supervised NILM algorithm?
+        meters : list of nilmtk.ElecMeters, optional
+            Required if `supervised=True`
+        num_meters : [int]
+            Required if `supervised=False`, Gives for each phase amount of meters
+        """
+
+        # TODO: `preprocessing_applied` for all meters
+        # TODO: submeter measurement should probably be the mains
+        #       measurement we used to train on, not the mains measurement.
+
+        # DataSet and MeterDevice metadata:
+        meter_devices = {
+            'disaggregate' : {
+                'model': str(EventbasedCombinationDisaggregatorModel), #self.model.MODEL_NAME,
+                'sample_period': sample_period,
+                'max_sample_period': sample_period,
+                'measurements': [{
+                    'physical_quantity': measurement[0],
+                    'type': measurement[1]
+                }]
+            },
+            'rest': {
+                'model': 'rest',
+                'sample_period': sample_period,
+                'max_sample_period': sample_period,
+                'measurements': [{
+                    'physical_quantity': measurement[0],
+                    'type': measurement[1]
+                }]
+            }
+        }
+
+        # HIERM USS ICH ICH EBEN AUS DEN MEHREREN TIMEFRAMES UEBER DIE PHASEN DIE AEUSSERE TIMEFRAME BESTIMMEN
+        merged_timeframes = merge_timeframes(timeframes, gap=sample_period)
+        total_timeframe = TimeFrame(merged_timeframes[0].start,
+                                    merged_timeframes[-1].end)
+
+        date_now = datetime.now().isoformat().split('.')[0]
+        dataset_metadata = {
+            'name': str(EventbasedCombinationDisaggregatorModel),
+            'date': date_now,
+            'meter_devices': meter_devices,
+            'timeframe': total_timeframe.to_dict()
+        }
+        output_datastore.save_metadata('/', dataset_metadata)
+        
+        
+        # Building metadata
+        for i in range(4):
+            phase_building = building * 10 + i 
+            building_path = '/building{}'.format(phase_building)
+            mains_data_location = building_path + '/elec/meter1'
+
+
+            # Rest meter:
+            elec_meters = {
+                1: {
+                    'device_model': 'rest',
+                    #'site_meter': True,
+                    'data_location': mains_data_location,
+                    'preprocessing_applied': {},  # TODO
+                    'statistics': {
+                        'timeframe': total_timeframe.to_dict()
+                    }
+                }
+            }
+
+            def update_elec_meters(meter_instance):
+                elec_meters.update({
+                    meter_instance: {
+                        'device_model': 'disaggregate', # self.MODEL_NAME,
+                        'submeter_of': 1,
+                        'data_location': (
+                            '{}/elec/meter{}'.format(
+                                building_path, meter_instance)),
+                        'preprocessing_applied': {},  # TODO
+                        'statistics': {
+                            'timeframe': total_timeframe.to_dict()
+                        }
+                    }
+                })
+
+            # Appliances and submeters:
+            appliances = []
+            if supervised:
+                for meter in meters:
+                    meter_instance = meter.instance()
+                    update_elec_meters(meter_instance)
+
+                    for app in meter.appliances:
+                        appliance = {
+                            'meters': [meter_instance],
+                            'type': app.identifier.type,
+                            'instance': app.identifier.instance 
+                            # TODO this `instance` will only be correct when the
+                            # model is trained on the same house as it is tested on
+                            # https://github.com/nilmtk/nilmtk/issues/194
+                        }
+                        appliances.append(appliance)
+
+                    # Setting the name if it exists
+                    if meter.name:
+                        if len(meter.name) > 0:
+                            elec_meters[meter_instance]['name'] = meter.name
+            else:  # Unsupervised
+                # Submeters:
+                # Starts at 2 because meter 1 is mains.
+                for chan in range(2, num_meters[i] + 1): # Additional + 1 because index 0 skipped
+                    update_elec_meters(meter_instance=chan)
+                    appliance = {
+                        'meters': [chan],
+                        'type': 'unknown',
+                        'instance': chan - 1
+                        # TODO this `instance` will only be correct when the
+                        # model is trained on the same house as it is tested on
+                        # https://github.com/nilmtk/nilmtk/issues/194
+                    }
+                    appliances.append(appliance)
+
+            building_metadata = {
+                'instance': (phase_building),
+                'elec_meters': elec_meters,
+                'appliances': appliances,
+                'original_name': original_building_meta['original_name'],
+                'geo_location': original_building_meta['geo_location'],
+                'zip': original_building_meta['zip'],
+            }
+
+            output_datastore.save_metadata(building_path, building_metadata)
+
+    
+
+    def _save_metadata_for_disaggregation_new_approach(self, output_datastore, key):
+        """
+        Also urpruenglich wollte ich das anders machen und eben auch die Metadatan mit abspeichern.
+        Habe ich aus zeitgruenden dann gelassen und mache es doch so wie es vorher war.
+        
+        Add metadata for disaggregated appliance estimates to datastore.
         Is a custom version for more sophisticated storing.
         In the future we should introduce the model as a separate object and than
         that one can be used and serialized.
