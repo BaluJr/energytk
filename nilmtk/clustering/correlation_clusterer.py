@@ -1,5 +1,4 @@
 from statsmodels.tsa.arima_model import ARIMA
-import cntk as C
 import numpy as np
 from pandas import DataFrame
 from .clusterer import Clusterer

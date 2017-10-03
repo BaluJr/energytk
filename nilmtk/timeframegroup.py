@@ -61,8 +61,8 @@ class TimeFrameGroup():
     def plot_simple(self, ax=None, gap=0.05, **plot_kwargs):
         for _, row in self._df.iterrows():
             length = (row['section_end'] - row['section_start']).total_seconds() / SECS_PER_DAY
-            bottom_left_corner = (mdates.date2num(row['section_start']), gap)
-            rect = plt.Rectangle(bottom_left_corner, length, 0.1,
+            bottom_left_corner = (mdates.date2num(row['section_start']), 0)
+            rect = plt.Rectangle(bottom_left_corner, length, 1,
                                  color='b', **plot_kwargs)
             ax.add_patch(rect)
         return ax
