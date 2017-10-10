@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 from nilmtk.feature_detectors.cluster import hart85_means_shift_cluster
 from nilmtk.feature_detectors.steady_states import find_steady_states_transients
-from nilmtk.disaggregate.accelerators import find_steady_states_transients_fast, pair_fast
+from nilmtk.disaggregate.accelerators import find_steady_states_fast, pair_fast
 from nilmtk.timeframe import merge_timeframes, TimeFrame
 
 from nilmtk.disaggregate import SupervisedDisaggregator, UnsupervisedDisaggregatorModel
@@ -36,7 +36,7 @@ class EventbasedCombinationDisaggregatorModel(UnsupervisedDisaggregatorModel):
 
         #min_tolerance: int, optional
         #    variance in power draw allowed for pairing a match
-        'min_tolerance': 100, 
+        'min_tolerance': 30, 
 
         # percent_tolerance: float, optional
         # if transition is greater than large_transition,
@@ -56,8 +56,15 @@ class EventbasedCombinationDisaggregatorModel(UnsupervisedDisaggregatorModel):
         # int
         #   The sample period, in seconds, used for both the
         #   mains and the disaggregated appliance estimates.
-        'sample_period':120
-        }
+        'sample_period':120,
+
+        'min_n_samples':2,
+
+        # Take more switch events to enable more complex state machines.
+        'max_baranski_clusters': 7,
+
+        'baranski_activated': False
+    }
     
     def extendModels(otherModel):
         '''
@@ -245,151 +252,6 @@ class PairBuffer(object):
         return pairmatched
 
     
-class FastPairBuffer(object):
-    """
-    This is an improved version of the pairing. It limits the 
-    reach of the buffer by the minimum powerflow and not by the 
-    pure distance.
-    This is also the function which will be later made faster 
-    by using cython.
-
-
-
-    Attributes:
-    Improved pairing function
-    * transitionList (list of tuples)
-    * matchedPairs (dataframe containing matched pairs of transitions)
-    """
-
-    def __init__(self, buffer_size, min_tolerance, percent_tolerance,
-                 large_transition, num_measurements):
-        """
-        Parameters
-        ----------
-        buffer_size: int, optional
-            size of the buffer to use for finding edges
-        min_tolerance: int, optional
-            variance in power draw allowed for pairing a match
-        percent_tolerance: float, optional
-            if transition is greater than large_transition, then use percent of large_transition
-        large_transition: float, optional
-            power draw of a Large transition
-        num_measurements: int, optional
-            2 if only active power
-            3 if both active and reactive power
-        """
-        # We use a deque here, because it allows us quick access to start and end popping
-        # and additionally, we can set a maxlen which drops oldest items. This nicely
-        # suits Hart's recommendation that the size should be tunable.
-        self._buffer_size = buffer_size
-        self._min_tol = min_tolerance
-        self._percent_tol = percent_tolerance
-        self._large_transition = large_transition
-        self.transition_list = MyDeque([], maxlen=self._buffer_size)
-        self._num_measurements = num_measurements
-        if self._num_measurements == 3:
-            # Both active and reactive power is available
-            self.pair_columns = ['T1 Time', 'T1 Active', 'T1 Reactive',
-                                 'T2 Time', 'T2 Active', 'T2 Reactive']
-        elif self._num_measurements == 2:
-            # Only active power is available
-            self.pair_columns = ['T1 Time', 'T1 Active',
-                                 'T2 Time', 'T2 Active']
-        self.matched_pairs = pd.DataFrame(columns=self.pair_columns)
-
-    def clean_buffer(self):
-        # Remove any matched transactions
-        for idx, entry in enumerate(self.transition_list):
-            if entry[self._num_measurements]:
-                self.transition_list.popmiddle(idx)
-                self.clean_buffer()
-                break
-                # Remove oldest transaction if buffer cleaning didn't remove anything
-                # if len(self.transitionList) == self._bufferSize:
-                #    self.transitionList.popleft()
-
-    def add_transition(self, transition):
-        # Check transition is as expected.
-        assert isinstance(transition, (tuple, list))
-        # Check that we have both active and reactive powers.
-        assert len(transition) == self._num_measurements
-        # Convert as appropriate
-        if isinstance(transition, tuple):
-            mtransition = list(transition)
-        # Add transition to List of transitions (set marker as unpaired)
-        mtransition.append(False)
-        self.transition_list.append(mtransition)
-        # checking for pairs
-        # self.pairTransitions()
-        # self.cleanBuffer()
-
-
-    def pair_transitions_fast(self):
-       
-        self.transition_list = MyDeque([], maxlen=self._buffer_size)
-        self.fast_trans_list = np.zeros(self._buffer_size)   
-        # No pair when only one element contained
-        tlength = len(self.transition_list)
-        pairmatched = False
-        if tlength < 2:
-            return pairmatched
-
-        # Create an array from the availa
-        numpy.roll
-
-
-        # Start the element distance at 1, go up to current length of buffer
-        for eDistance in range(1, tlength):
-            idx = 0
-            while idx < tlength - 1:
-                # We don't want to go beyond length of array
-                compindex = idx + eDistance
-                if compindex < tlength:
-                    val = self.transition_list[idx]
-                    # val[1] is the active power and
-                    # val[self._num_measurements] is match status
-                    if (val[1] > 0) and (val[self._num_measurements] is False):
-                        compval = self.transition_list[compindex]
-                        if compval[self._num_measurements] is False:
-                            # Add the two elements for comparison
-                            vsum = np.add(
-                                val[1:self._num_measurements],
-                                compval[1:self._num_measurements])
-                            # Set the allowable tolerance for reactive and
-                            # active
-                            matchtols = [self._min_tol, self._min_tol]
-                            for ix in range(1, self._num_measurements):
-                                matchtols[ix - 1] = self._min_tol if (max(np.fabs([val[ix], compval[ix]]))
-                                                                      < self._large_transition) else (self._percent_tol
-                                                                                                      * max(
-                                    np.fabs([val[ix], compval[ix]])))
-                            if self._num_measurements == 3:
-                                condition = (np.fabs(vsum[0]) < matchtols[0]) and (
-                                    np.fabs(vsum[1]) < matchtols[1])
-
-                            elif self._num_measurements == 2:
-                                condition = np.fabs(vsum[0]) < matchtols[0]
-
-                            if condition:
-                                # Mark the transition as complete
-                                self.transition_list[idx][
-                                    self._num_measurements] = True
-                                self.transition_list[compindex][
-                                    self._num_measurements] = True
-                                pairmatched = True
-
-                                # Append the OFF transition to the ON. Add to
-                                # dataframe.
-                                matchedpair = val[0:self._num_measurements] + compval[0:self._num_measurements]
-                                self.matched_pairs.loc[len(self.matched_pairs),:] = matchedpair
-
-                    # Iterate Index
-                    idx += 1
-                else:
-                    break
-
-        return pairmatched
-
 
 class EventbasedCombination(SupervisedDisaggregator):
     """ This is the final used disaggregator, which bases on the the 
@@ -426,7 +288,7 @@ class EventbasedCombination(SupervisedDisaggregator):
         super(EventbasedCombination, self).__init__()
 
 
-    def train(self, metergroup, **kwargs):
+    def train(self, metergroup, output_datastore, **kwargs):
         """
         Train using Hart85. Places the learnt model in `model` attribute.
 
@@ -435,57 +297,242 @@ class EventbasedCombination(SupervisedDisaggregator):
         metergroup : a nilmtk.MeterGroup object
         """
         
+        kwargs = self._pre_disaggregation_checks(metergroup, kwargs)
+        kwargs.setdefault('sample_period', 60)
+        kwargs.setdefault('sections', metergroup.good_sections().merge_shorter_gaps_than('10min'))
+
+        pool = Pool(processes=4)
         metergroup = metergroup.sitemeters() # Only the main elements are interesting
         
         # Find the events
         model = self.model
         model.steady_states = []
         model.transients = []
-        for i in range(len(metergroup)):
+
+        #for i in range(len(metergroup)):
             #t1 = time.time()
             #steady_states, transients = find_steady_states_transients(
             #    metergroup.meters[i], cols, noise_level, state_threshold, **kwargs)
             #t2 = time.time()
-            cols=self.model.params['cols']
-            steady_states, transients = find_steady_states_transients_fast(
-                metergroup.meters[i], cols, model.params['noise_level'], model.params['state_threshold'], **kwargs)
-            #t3 = time.time()
-            # somehow the timezone is lost within c programming
-            model.steady_states.append(steady_states.tz_localize('utc'))
-            model.transients.append(transients.tz_localize('utc')) #pd.merge(self.steady_states[0], self.steady_states[1], how='inner', suffixes=['_1', '_2'], indicator=True, left_index =True, right_index =True)
         
+        overall_powerflow = [None] * len(metergroup) # will be immediatly stored. Possible as freq reduced to 1 min.
+        cols=self.model.params['cols']
+        loader = []
+        steady_states_list = []
+        transients_list = []    
+        t1 = time.time()
+        for i in range(len(metergroup)):
+            steady_states_list.append([])
+            transients_list.append([])
+            loader.append(metergroup.meters[i].load(cols=cols, chunksize = 20000000, **kwargs))
+        try:
+            while(True):
+                input_params = []
+                for i in range(len(metergroup)):
+                    power_dataframe = next(loader[i]).dropna()
+                    if overall_powerflow[i] is None:
+                        overall_powerflow[i] = power_dataframe.resample('2min').agg('mean')  
+                    else:
+                        overall_powerflow[i] = overall_powerflow[i].append(power_dataframe.resample('2min').agg('mean'))
+                    indices = np.array(power_dataframe.index)
+                    values = np.array(power_dataframe.iloc[:,0])
+                    input_params.append((indices, values, model.params['min_n_samples'], model.params['noise_level'], model.params['state_threshold']))
+                states_and_transients = pool.map(find_steady_states_fast, input_params)
+                for i in range(len(metergroup)):
+                    steady_states_list[i].append(states_and_transients[i][0])
+                    transients_list[i].append(states_and_transients[i][1])
+
+        except StopIteration:
+            pass
+        
+        # Somehow the timezone is lost within c programming    
+        for i in range(len(metergroup)):
+            model.steady_states.append(pd.concat(steady_states_list[i]).tz_localize('utc'))
+            model.transients.append(pd.concat(transients_list[i]).tz_localize('utc')) #pd.merge(self.steady_states[0], self.steady_states[1], how='inner', suffixes=['_1', '_2'], indicator=True, left_index =True, right_index =True)
+        t2 = time.time()
+        print(t2-t1)
+    
         # Create a third powerflow with events, common to all powerflows
         model.transients.append(self.separate_simultaneous_events(self.model.transients))
 
         # Do the pairing in parallel for the four powerflows
-        pool = Pool(processes=4)
+        
         #t1 = time.time()
         #self.pair_df = pool.map(functools.partial(self.pair, 
         #           buffer_size = buffer_size,     
         #           min_tolerance = min_tolerance, 
         #           percent_tolerance = percent_tolerance,
         #           large_transition = large_transition), self.transients)
-        t2 = time.time()
-        
-        # Manually create the paramters because not working with partial somehow
         input_params = []
         for cur in model.transients:
             input_params.append((cur, model.params['min_tolerance'], model.params['percent_tolerance'], model.params['large_transition']))
-        model.pair_df_new = pool.map(pair_fast, input_params)
-        t3 = time.time()
+        model.pair_df = pool.map(pair_fast, input_params)
+        
+        # Again Timezone lost
+        for i in range(len(model.pair_df)):
+            model.pair_df[i]['T1 Time'] = model.pair_df[i]['T1 Time'].astype("datetime64").dt.tz_localize('utc')
+            model.pair_df[i]['T2 Time'] = model.pair_df[i]['T2 Time'].astype("datetime64").dt.tz_localize('utc')
 
-        # Do the clustering
-        #tx1 = []
-        tx2 = []
+
+
+        # Do the clustering and remove assigned 
+        tx = []
         model.centroids = []
+        model.appliances = [[]] * len(model.transients)
         for i in range(len(model.transients)):
+            tx.append(time.time()) 
+            # HIER SOLLTE ICH GGF ZWEI MAL CLUSTERN
+
+            centroids, labels = hart85_means_shift_cluster(model.pair_df[i], model.params['cols'])
+            model.centroids.append(centroids)
+            model.pair_df[i]['appliance'] = labels
+            pair_assigned_to_a_cluster = model.pair_df[i][labels != -1]
+            model.transients[i].drop(pair_assigned_to_a_cluster['T1 Time'], inplace=True)
+            
+            for name, group in pair_assigned_to_a_cluster.groupby('appliance'):
+                col = overall_powerflow[0].columns
+                off_events = group[['T2 Time', 'T2 Active']].set_index('T2 Time')
+                off_events.index.names = ['ts']
+                off_events.columns = overall_powerflow[0].columns
+                group = group[['T1 Time', 'T1 Active']].set_index('T1 Time')
+                group.index.names = ['ts']
+                group.columns = col
+                all_events = pd.concat([group, off_events], axis = 0).sort_index()
+                # Add zeros before uprising and after falling flags
+                all_events = all_events.append(pd.DataFrame(0, columns= col, index=all_events[all_events < 0].dropna().index + pd.Timedelta('2sec')))
+                all_events = all_events.append(pd.DataFrame(0, columns= col, index=all_events[all_events > 0].dropna().index - pd.Timedelta('2sec')))
+                # Add zero in the end and beginning
+                all_events.loc[overall_powerflow[0].index[0]] = 0
+                all_events.loc[overall_powerflow[0].index[-1]] = 0
+                all_events.sort_index(inplace = True)
+                model.appliances[i].append(all_events.abs().astype(np.float32))
+
+        # Cluster the remaining events by baranski
+        if (self.model.params['baranski_activated']):
+            baranski_labels = []
+            for i in range(len(model.transients)):
+                centroids, labels = self._cluster_events(model.transients[i], max_num_clusters=self.model.max_baranski_clusters, method='kmeans')
+                model.transients[i].append(labels)
+
+            # Build the state machines
+                    
 
 
-            tx2.append(time.time())
-            model.centroids.append(hart85_means_shift_cluster(model.pair_df_new[i], model.params['cols']))
-        t4 = time.time()
-                        
+        # Create the rest powerflow from the overall powerflow
+        for i in range(len(model.transients)-1): # HIER MUSS ICH NOCH SCHAUEN WIE ICH DAS MIT DEN GEMEINSAMEN EVENTS MACHE
+            for appliance in model.appliances[i]:
+                overall_powerflow[i] = overall_powerflow[i] - appliance.resample('2s', how='mean').interpolate().resample('2min', how='mean')
 
+        # Store the result
+        for phase in range(len(model.transients)):
+            building_path = '/building{}'.format(metergroup.building() * 10 + phase)
+            for i, appliance in enumerate(self.model.appliances[phase]):
+                key = '{}/elec/meter{:d}'.format(building_path, i + 2) # Weil 0 nicht gibt und Meter1 das undiaggregierte ist und 
+                output_datastore.append(key, appliance) 
+            output_datastore.append('{}/elec/meter{:d}'.format(building_path, 1), overall_powerflow[phase if phase < 3 else phase-1])
+
+        # Then store the metadata
+        num_meters = [len(cur) + 1 for cur in self.model.centroids] # Add one for the rest
+        #if data_is_available:
+        self._save_metadata_for_disaggregation(
+            output_datastore=output_datastore,
+            sample_period=kwargs['sample_period'],
+            measurement=col,
+            timeframes=list(kwargs['sections']),
+            building=metergroup.building(),
+            supervised=False,
+            num_meters=num_meters,
+            original_building_meta=metergroup.meters[0].building_metadata
+        )
+
+  
+    def _cluster_events(self, events, max_num_clusters=3, exact_num_clusters=None, method='kmeans'):
+        ''' Applies clustering on the previously extracted events. 
+        The _transform_data function can be removed as we are immediatly passing in the 
+        pandas dataframe.
+
+        Parameters
+        ----------
+        events : pd.DataFrame with the columns "PowerDelta, Duration, MaxSlope"
+        max_num_clusters : int
+        exact_num_clusters: int
+        method: string Possible approaches are "kmeans" and "ward"
+        Returns
+        -------
+        centroids : ndarray of int32s
+            Power in different states of an appliance, sorted
+            
+        labels: ndarray of int32s
+            The assignment of each event to the events
+        '''
+              
+        # Preprocess dataframe
+        mapper = DataFrameMapper([('active transition', None)]) 
+        clusteringInput = mapper.fit_transform(events.copy())
+    
+        # Do the clustering
+        num_clusters = -1
+        silhouette = -1
+        k_means_labels = {}
+        k_means_cluster_centers = {}
+        k_means_labels_unique = {}
+
+        # If the exact number of clusters are specified, then use that
+        if exact_num_clusters is not None:
+            labels, centers = _apply_clustering_n_clusters(clusteringInput, exact_num_clusters, method)
+            return centers.flatten()
+
+        # Special case:
+        if len(events) == 1: 
+            return np.array([events.iloc[0]["active transition"]]), np.array([0])
+
+        # If exact cluster number not specified, use cluster validity measures to find optimal number
+        for n_clusters in range(2, max_num_clusters):
+            try:
+                # Do a clustering for each amount of clusters
+                labels, centers = self._apply_clustering_n_clusters(clusteringInput, n_clusters, method)
+                k_means_labels[n_clusters] = labels
+                k_means_cluster_centers[n_clusters] = centers
+                k_means_labels_unique[n_clusters] = np.unique(labels)
+
+                # Then score each of it and take the best one
+                try:
+                    sh_n = sklearn.metrics.silhouette_score(
+                        events, k_means_labels[n_clusters], metric='euclidean')
+                    if sh_n > silhouette:
+                        silhouette = sh_n
+                        num_clusters = n_clusters
+                except Exception as inst:
+                    num_clusters = n_clusters
+
+            except Exception:
+                if num_clusters > -1:
+                    return k_means_cluster_centers[num_clusters]
+                else:
+                    return np.array([0])
+
+        return k_means_cluster_centers[num_clusters].flatten(), k_means_labels[num_clusters]
+
+
+
+        # Postprocess and return clusters (weiss noch nicht ob das notwendig ist)
+        centroids = np.append(centroids, 0)  # add 'off' state
+        centroids = np.round(centroids).astype(np.int32)
+        centroids = np.unique(centroids)  # np.unique also sorts
+        return centroids
+    
+
+    def _apply_clustering_n_clusters(self, X, n_clusters, method='kmeans'):
+        """
+        :param X: ndarray
+        :param n_clusters: exact number of clusters to use
+        :param method: string kmeans or ward
+        :return:
+        """
+        if method == 'kmeans':
+            k_means = KMeans(init='k-means++', n_clusters=n_clusters)
+            k_means.fit(X)
+            return k_means.labels_, k_means.cluster_centers_
 
 
 
@@ -522,6 +569,10 @@ class EventbasedCombination(SupervisedDisaggregator):
             with same index as `chunk`.
         """
         model = self.model
+
+        load_kwargs = self._pre_disaggregation_checks(mains, load_kwargs)
+        load_kwargs.setdefault('sample_period', 60)
+        load_kwargs.setdefault('sections', mains.good_sections())
 
         states = pd.DataFrame(
             np.NaN, index=chunk.index, columns= model.centroids[phase].index.values)
@@ -660,7 +711,6 @@ class EventbasedCombination(SupervisedDisaggregator):
         model = self.model
 
         load_kwargs = self._pre_disaggregation_checks(mains, load_kwargs)
-
         load_kwargs.setdefault('sample_period', 60)
         load_kwargs.setdefault('sections', mains.good_sections())
 
@@ -684,9 +734,6 @@ class EventbasedCombination(SupervisedDisaggregator):
         # Initially all appliances/meters are in unknown state (denoted by -1)
         prev = [OrderedDict()] * len(transients)
         
-        # AHHHRG! Hier muss ich irgendwie vorne und hinten eine 0 ergaenzen, damit auf jeden Fall etwas im Storage landet
-        # UND DANN HABE ICH ES!
-
         timeframes = []
         disaggregation_overall = [None] * len(transients)
         for phase in range(len(transients)):
@@ -745,7 +792,7 @@ class EventbasedCombination(SupervisedDisaggregator):
                 self._save_metadata_for_disaggregation(
                     output_datastore=output_datastore,
                     sample_period=load_kwargs['sample_period'],
-                    measurement=measurement,
+                    measurement=col,
                     timeframes=timeframes,
                     building=mains.building(),
                     supervised=False,
@@ -892,8 +939,8 @@ class EventbasedCombination(SupervisedDisaggregator):
                 'sample_period': sample_period,
                 'max_sample_period': sample_period,
                 'measurements': [{
-                    'physical_quantity': measurement[0],
-                    'type': measurement[1]
+                    'physical_quantity': measurement.levels[0][0],
+                    'type': measurement.levels[1][0]
                 }]
             },
             'rest': {
@@ -901,8 +948,8 @@ class EventbasedCombination(SupervisedDisaggregator):
                 'sample_period': sample_period,
                 'max_sample_period': sample_period,
                 'measurements': [{
-                    'physical_quantity': measurement[0],
-                    'type': measurement[1]
+                    'physical_quantity': measurement.levels[0][0],
+                    'type': measurement.levels[1][0]
                 }]
             }
         }

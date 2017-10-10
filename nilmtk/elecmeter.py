@@ -712,6 +712,8 @@ class ElecMeter(Hashable, Electric):
 
     def nonzero_sections(self, ignore_gaps=False, **load_kwargs):
         """
+        Needs the good sections to be calculated before
+
         Parameters
         ----------
         full_results : bool, default=False
@@ -725,10 +727,12 @@ class ElecMeter(Hashable, Electric):
         object otherwise return list of TimeFrame objects.
         """
         
-        if ignore_gaps:
-            loader_kwargs['sections'] = self.good_sections(**loader_kwargs)
+        # Don't need these since I have the new calculation approach
+        #if ignore_gaps:
+        #    load_kwargs['sections'] = self.good_sections(**load_kwargs)._data
+        #load_kwargs.setdefault('n_look_ahead_rows', 10) 
 
-        load_kwargs.setdefault('n_look_ahead_rows', 10) 
+        
         nodes = [NonZeroSections]
         results_obj = NonZeroSections.results_class()
         return self._get_stat_from_cache_or_compute(
@@ -834,13 +838,24 @@ class ElecMeter(Hashable, Electric):
             # => Ist ja so gemacht. Nur eben fuer jede Section!
             # => Die einzige rweiterung waere das durchreichen von Results.                                                                 
             #results_obj.update(computed_result.results)
-            results_obj = self._compute_stat(nodes, loader_kwargs)
+            
+            results_obj = self._compute_stat(nodes, loader_kwargs).results
+            
+            # For Nonzero section exclude where there are zero sections
+            if  results_obj.name == 'nonzero_sections':
+                good_sections = self.good_sections(**loader_kwargs)._data
+                results_obj._data = results_obj._data.intersection(good_sections)
 
             # Save to disk newly computed stats
-            stat_for_store = results_obj.results.export_to_cache()
+            stat_for_store = results_obj.export_to_cache()
             try:
                 #self.store.remove(key_for_cached_stat)
                 self.store.put(key_for_cached_stat, stat_for_store, fixed = True)
+                # Temporary workarround to store the good sections also for the other meters
+                if results_obj.name == 'good_sections':
+                    for i in range(2,4):
+                        self.store.put(key_for_cached_stat.replace('meter1', 'meter' +str(i)), stat_for_store, fixed = True) 
+
             except ValueError:
                 # the old table probably had different columns
                 self.store.remove(key_for_cached_stat)
@@ -930,8 +945,8 @@ class ElecMeter(Hashable, Electric):
         beginning sothat you can access the values in a fast way afterwards.
         '''
        
-        self.good_sections(chunksize=1000000, verbose = verbose)
-        #self.nonzero_sections(chunksize=1000000, verbose = verbose)
+        self.good_sections(chunksize=100000000, verbose = verbose)
+        self.nonzero_sections(chunksize=100000000, verbose = verbose)
         #self.total_energy(chunksize=1000000, verbose = verbose)
         #self.dropout_rate(verbose=False)#, chunksize=5000000)
         #tst2 = tst.invert()

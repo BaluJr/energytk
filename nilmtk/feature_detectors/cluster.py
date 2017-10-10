@@ -141,7 +141,7 @@ def _apply_clustering(X, max_num_clusters, exact_num_clusters=None):
 
 def hart85_means_shift_cluster(pair_buffer_df, cols):
     if len(pair_buffer_df) < 2:
-        return pd.DataFrame(columns=cols)
+        return pd.DataFrame(columns=cols),  np.array([])
 
     from sklearn.cluster import MeanShift
     # Creating feature vector (for each pair the median between the absolute values of the on- and off-event)
@@ -159,4 +159,4 @@ def hart85_means_shift_cluster(pair_buffer_df, cols):
     ms.fit(X)
     labels = ms.labels_
     cluster_centers = ms.cluster_centers_
-    return pd.DataFrame(cluster_centers, columns=cols)
+    return pd.DataFrame(cluster_centers, columns=cols), labels

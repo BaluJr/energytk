@@ -35,8 +35,7 @@ def primes(int kmax):
 
 
 
-def find_steady_states_fast(np.ndarray indices, np.ndarray values, int min_n_samples=2, int state_threshold=15,
-                       int noise_level=70):
+def find_steady_states_fast(inputs): #np.ndarray indices, np.ndarray values, int min_n_samples=2, int state_threshold=15, int noise_level=70):
     """Finds steady states given a DataFrame of power with only
     a single column.
 
@@ -55,15 +54,23 @@ def find_steady_states_fast(np.ndarray indices, np.ndarray values, int min_n_sam
     -------
     steady_states, transitions
     """
+    cdef np.ndarray indices
+    cdef np.ndarray values 
+    cdef int min_n_samples 
+    cdef int state_threshold
+    cdef int noise_level
+
     # Tells whether we have both real and reactive power or only real power
     #cdef int num_measurements = len(dataframe.columns)
-    cdef float estimated_steady_power# = np.array([0] * num_measurements)
-    cdef float last_steady_power# = np.array([0] * num_measurements)
-    cdef float previous_measurement#= np.array([0] * num_measurements)
+    cdef float estimated_steady_power = 0 # = np.array([0] * num_measurements)
+    cdef float last_steady_power = 0 # = np.array([0] * num_measurements)
+    cdef float previous_measurement = 0 #= np.array([0] * num_measurements)
     cdef float last_transition
 
+    # Map inputs
+    indices, values, min_n_samples, state_threshold, noise_level = inputs
+   
     # These flags store state of power
-
     instantaneous_change = False  # power changing this second
     ongoing_change = False  # power change in progress over multiple seconds
 
@@ -72,7 +79,7 @@ def find_steady_states_fast(np.ndarray indices, np.ndarray values, int min_n_sam
     transitions = []  # holds information on transitions
     steady_states = []  # steadyStates to store in returned Dataframe
     cdef int N = 0  # N stores the number of samples in state
-    #curTime = dataframe.iloc[0].name  # first state starts at beginning
+    curTime = indices[0] # dataframe.iloc[0].name  # first state starts at beginning
 
     # Iterate over the rows performing algorithm
     print ("Finding Edges, please wait ...")
@@ -210,7 +217,7 @@ def find_steady_states_fast(np.ndarray indices, np.ndarray values, int min_n_sam
                                     columns=['active average']) #cols_steady[num_measurements])
     print("States frame created.")
     print("Finished.")
-    return steady_states, transitions
+    return (steady_states, transitions)
 
 
 

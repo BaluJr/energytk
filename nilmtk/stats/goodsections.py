@@ -28,8 +28,7 @@ class GoodSections(Node):
     def process(self):
         metadata = self.upstream.get_metadata()
         self.check_requirements()
-        self.results = GoodSectionsResults(
-            metadata['device']['max_sample_period'])
+        self.results = GoodSectionsResults(2.3) #metadata['device']['max_sample_period'])
         for chunk in self.upstream.process():
             self._process_chunk(chunk, metadata)
             yield chunk
@@ -59,7 +58,7 @@ class GoodSections(Node):
             then the first TimeFrame will have `start=None`.
         """
         # Retrieve relevant metadata
-        max_sample_period = metadata['device']['max_sample_period']
+        max_sample_period = 2.3 # metadata['device']['max_sample_period']
         look_ahead = getattr(df, 'look_ahead', None)
         timeframe = df.timeframe
 

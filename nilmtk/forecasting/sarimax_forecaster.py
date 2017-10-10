@@ -9,33 +9,15 @@ class ArimaForecasterModel(object):
         #The number of times that the raw observations are differenced, also called the degree of differencing.
         'd': 2,
         #The size of the moving average window, also called the order of moving average
-        'q': 1 ,
-
-        # Seasonal
-        'P': 3,
-
-        # Seasonal
-        'D': 2,
-       
-        # Seasonal
-        'Q': 2,
-       
-        # Seasonal
-        'S': 2,
-
-        # Die externen Daten werden direkt bei fit mit reingegeben
-        ## The feature, which is used from the external data
-        #'ext_data': 'temperature',  
-        ## The external, which is used to create the vectors for each element, DataSet
-        #'ext_data_dataset': "C:\\Users\\maxim_000\\Documents\\InformatikStudium_ETH\\Masterarbeit\\6_Data\\Tmp\\ExtData.hdf",
+        'q': 1 
     }
 
     model = None
 
 class ArimaForecaster(Forecaster):
-    """This is a forecaster based on Seasonal AutoRegressive Integrated Moving Average with eXogenous regressors
-    https://www.digitalocean.com/community/tutorials/a-guide-to-time-series-forecasting-with-arima-in-python-3
-
+    """This is a forecaster based on the
+    popular AutoRegressive Integrated Moving Average
+    https://machinelearningmastery.com/arima-for-time-series-forecasting-with-python/
     """
 
     model_class = ArimaForecasterModel

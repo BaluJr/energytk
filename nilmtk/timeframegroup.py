@@ -1,4 +1,5 @@
 from __future__ import print_function, division
+#from nilmtk.stats import intersect_many_fast
 import matplotlib.pyplot as plt
 import pandas as pd
 from datetime import timedelta
@@ -25,7 +26,9 @@ class TimeFrameGroup():
     _df: The dataframe with the sec_start sec_end [start_time, end_time]
     """
 
-    def __init__(self, timeframes=None):
+    def __init__(self, timeframes=None, starts_and_ends = None):
+        if isinstance(timeframes, TimeFrameGroup):
+            self._df = timeframes._df
         if isinstance(timeframes, pd.core.indexes.datetimes.DatetimeIndex):
             self._df = timeframes
             #periods = timeframes
@@ -33,6 +36,8 @@ class TimeFrameGroup():
             #              for period in periods]
         elif isinstance(timeframes, pd.DataFrame):
             self._df = timeframes.copy() 
+        elif not starts_and_ends is None:
+            self._df = pd.DataFrame({'section_start': starts_and_ends['starts'],  'section_end': starts_and_ends['ends']})
         elif not timeframes is None:
             self._df = pd.DataFrame([(frame.start, frame.end) for frame in timeframes], columns = ['section_start', 'section_end'])
         else:
@@ -135,11 +140,14 @@ class TimeFrameGroup():
         #return new_tfg
 
     def merge_shorter_gaps_than(self, threshold):
+        if self._df.empty:
+            return TimeFrameGroup()
+
         gap_larger = ((self._df["section_start"].shift(-1) - self._df["section_end"]) > threshold)
         gap_larger.iloc[-1] = True # keep last
         relevant_starts = self._df[["section_start"]][gap_larger.shift(1).fillna(True)].reset_index(drop=True)
         relevant_ends = self._df[["section_end"]][gap_larger].reset_index(drop=True)
-        pd.concat([relevant_starts, relevant_ends], axis=1)
+        return TimeFrameGroup(pd.concat([relevant_starts, relevant_ends], axis=1))
 
 
     def invert(self, start = None, end = None):
@@ -148,6 +156,8 @@ class TimeFrameGroup():
         That means where there was a gap before is now a 
         TimeFrame and vice versa.
         '''
+        if self._df.empty:
+            return TimeFrameGroup()
 
         self._df['section_end'] = self._df['section_end'].shift(1)
         self._df = self._df.dropna().rename(columns={"section_end":"section_start", "section_start": "section_end"})

@@ -82,7 +82,7 @@ class GoodSectionsResults(Results):
             end_date_of_prev_row = row['end']
             sections.extend(row_sections)
 
-        if sections:
+        if sections and sections.count() > 0:
             sections[-1].include_end = True
             if sections[-1].end is None:
                 sections[-1,1] = end_date_of_prev_row  # HIER MUSSTE ICH AUFPASSEN, DASS ICH UEBERSCHREIBE!

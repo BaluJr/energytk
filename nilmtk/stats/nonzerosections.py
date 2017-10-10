@@ -1,4 +1,5 @@
 from __future__ import print_function, division
+from .accelerators_stat import get_nonzero_sections_fast
 import numpy as np
 from numpy import diff, concatenate
 import gc
@@ -68,23 +69,17 @@ class NonZeroSections(Node):
         timeframe = df.timeframe
 
         # Process dataframe
-        nonzero_sections = get_nonzero_sections(df)
+        nonzero_sections_starts, nonzero_sections_ends = get_nonzero_sections_fast(df)
  
         # Update self.results
-        if nonzero_sections:
-            self.results.append(timeframe, {'sections': [nonzero_sections]})
+        #if nonzero_sections:
+        self.results.append(timeframe, {'sections' : [{'start': nonzero_sections_starts, 'end': nonzero_sections_ends}]})
 
-
-
-
-def _free_memory_dataframe(df):
-    last_index = df[-1]
-    del index
-    gc.collect()
-    return last_index
 
 def get_nonzero_sections(df):
     """
+    The input are always good_sections
+
     Parameters
     ----------
     df : pd.DataFrame
@@ -100,56 +95,69 @@ def get_nonzero_sections(df):
     """
 
     # Find the switching actions, which stay constant for minimal_zerotime times
-    minimal_zerotime = 10
-    look_ahead = getattr(df, 'look_ahead', None)
+    #minimal_zerotime = 3
+    #look_ahead = getattr(df, 'look_ahead', None)
     df = df > 0    
-
     tmp = df.astype(np.int).diff()
-    nonzero_sect_starts = (tmp == 1)
-    nonzero_sect_ends = (tmp == 0)
-    for i in range(2,minimal_zerotime):
-        tmp = df.astype(np.int).diff(i)
-        nonzero_sect_starts *= tmp == 1
-        nonzero_sect_ends *= tmp == 0
-    tmp = df.astype(np.int).diff(minimal_zerotime)
-    nonzero_sect_starts *=  tmp == 1
-    nonzero_sect_ends *= tmp == -1
-    del tmp
-    nonzero_sect_starts = list(df[nonzero_sect_starts].dropna().index)
-    nonzero_sect_ends   = list(df[nonzero_sect_ends.shift(-minimal_zerotime).fillna(False)].dropna().index)
+    nonzero_sect_starts = df[(tmp == 1).values].index.values
+    nonzero_sect_ends = df[(tmp == -1).values].index.values
+    return nonzero_sect_starts, nonzero_sect_ends 
 
-    # If this chunk starts or ends with an open-ended
-    # nonzero section then the relevant TimeFrame needs to have
-    # a None as the start or end.
-    for i in range(minimal_zerotime):
-        if df.iloc[i, 0] == True:
-            nonzero_sect_starts = [df.index[i]] + nonzero_sect_starts
-            break
+    #for i in range(2,minimal_zerotime):
+    #    tmp = df.astype(np.int).diff(i)
+    #    nonzero_sect_starts *= tmp == 1
+    #    nonzero_sect_ends *= tmp == 0
+    #tmp = df.astype(np.int).diff(minimal_zerotime)
+    #nonzero_sect_starts *=  tmp == 1
+    #nonzero_sect_ends *= tmp == -1
+    #del tmp
+    #nonzero_sect_starts = list(df[nonzero_sect_starts].dropna().index)
+    #nonzero_sect_ends   = list(df[nonzero_sect_ends.shift(-minimal_zerotime).fillna(False)].dropna().index)
 
-    if df.iloc[-1,0] == True:
-        nonzero_sect_ends += [None]
-    else:
-        # Only start new zerosection when long enough, need look_ahead
-        for i in range(1,minimal_zerotime+1):
-            if df.iloc[-i, 0] != False:
-                break
+    ## If this chunk starts or ends with an open-ended
+    ## nonzero section then the relevant TimeFrame needs to have
+    ## a None as the start or end.
+    #for i in range(minimal_zerotime):
+    #    if df.iloc[i, 0] == True:
+    #        nonzero_sect_starts = [df.index[i]] + nonzero_sect_starts
+    #        break
 
-        if i < (minimal_zerotime):
-            if look_ahead.head(minimal_zerotime-i).sum()[0] == 0:
-                nonzero_sect_ends += [df.index[-i]] #, 0]]
-            else:
-                nonzero_sect_ends += [None]
+    #if df.iloc[-1,0] == True:
+    #    nonzero_sect_ends += [None]
+    #else:
+    #    # Only start new zerosection when long enough, need look_ahead
+    #    for i in range(1,minimal_zerotime+1):
+    #        if df.iloc[-i, 0] != False:
+    #            break
+
+    #    if i < (minimal_zerotime):
+    #        if look_ahead.head(minimal_zerotime-i).sum()[0] == 0:
+    #            nonzero_sect_ends += [df.index[-i]] #, 0]]
+    #        else:
+    #            nonzero_sect_ends += [None]
 
 
-    # Merge together ends and starts
-    assert len(nonzero_sect_starts) == len(nonzero_sect_ends)
-    sections = [TimeFrame(start, end)
-                for start, end in zip(nonzero_sect_starts, nonzero_sect_ends)
-                if not (start == end and start is not None)]
+    ## Merge together ends and starts
+    #assert len(nonzero_sect_starts) == len(nonzero_sect_ends)
+
+    #if len(nonzero_sect_ends) > len(nonzero_sect_starts):
+    #    sections = [TimeFrame(start, end)
+    #else:
+    #    sections = []
+    #if len(nonzero_sect_starts) == 0 == len(nonzero_sect_ends):
+    #    return [TimeFrameGroup()]
+    #else:
+    #    if nonzero_sect_starts[0] > nonzero_sect_ends[0]:
+    #        nonzero_sect_starts.append(None)
+    #    if nonzero_sect_ends[-1] < nonzero_sect_starts[-1]:
+    #        nonzero_sect_ends.append(None)
+    #sections = [TimeFrame(start, end)
+    #            for start, end in zip(nonzero_sect_starts, nonzero_sect_ends)
+    #            if not (start == end and start is not None)]
 
     # Memory management
-    del nonzero_sect_starts
-    del nonzero_sect_ends
-    gc.collect()
+    #del nonzero_sect_starts
+    #del nonzero_sect_ends
+    #gc.collect()
 
-    return sections
+    #return sections

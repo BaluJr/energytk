@@ -1743,8 +1743,10 @@ class MeterGroup(Electric):
                 print("Skipped " + str(meter))
             return
 
-        t1 = time.time()
-        meter.calc_and_cache_stats(verbose)
+        if verbose:
+            t1 = time.time()
+        for meter in self.meters:
+            meter.calc_and_cache_stats(verbose)
         if verbose:
             t2 = time.time()
             print(str(meter) + ":" + str(t2 - t1) + 'sec')
@@ -1885,6 +1887,8 @@ def combine_chunks_from_generators(index, columns, meters, load_kwargs):
     columns_to_average_counter = pd.DataFrame(dtype=np.uint16)
     timeframe = None
 
+    # ALSO HIER MUSS ICH SCHAUEN WARUM NAN entsteht. Der index passt irgendwie nicht zum Chunk!??? 
+
     # Go through each generator to try sum values together
     for meter in meters:
         # Load the data
@@ -1917,9 +1921,9 @@ def combine_chunks_from_generators(index, columns, meters, load_kwargs):
 
             aligned = column.reindex(index, copy=False).values.astype('float32')
             del column
-            cumulator_col = cumulator_arr[:,i]
+            cumulator_col = cumulator_arr[:,i] # Call by reference
             where_both_are_nan = np.isnan(cumulator_col) & np.isnan(aligned)
-            np.nansum([cumulator_col, aligned], axis=0, out=cumulator_col, 
+            np.nansum([cumulator_col, aligned], axis=0, out=cumulator_col,  # HIER IN DER FUNKTION WIRD DIE SPALTE GESETZT
                       dtype=DTYPE)
             cumulator_col[where_both_are_nan] = np.NaN
             del aligned
