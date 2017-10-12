@@ -51,6 +51,11 @@ class NonZeroSectionsResults(Results):
         for index, row in self._data.iterrows():
             starts.append(row['sections']['start'])
             ends.append(row['sections']['end'])
+
+        if len(starts) == 0 == len(ends):
+            self._data = TimeFrameGroup()
+            return
+
         starts = pd.concat(starts)
         ends = pd.concat(ends)
         
