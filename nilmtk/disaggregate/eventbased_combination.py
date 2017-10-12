@@ -30,7 +30,7 @@ class EventbasedCombinationDisaggregatorModel(UnsupervisedDisaggregatorModel):
         # Only necessary for the old approach
         'buffer_size': 20, 
 
-        'noise_level': 70, 
+        'noise_level': 10, 
         
         'state_threshold': 15,
 
@@ -437,7 +437,7 @@ class EventbasedCombination(SupervisedDisaggregator):
         self._save_metadata_for_disaggregation(
             output_datastore=output_datastore,
             sample_period=kwargs['sample_period'],
-            measurement=col,
+            measurement=overall_powerflow[0].columns,
             timeframes=list(kwargs['sections']),
             building=metergroup.building(),
             supervised=False,
