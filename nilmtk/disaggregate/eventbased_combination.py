@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 from nilmtk.feature_detectors.cluster import hart85_means_shift_cluster
 from nilmtk.feature_detectors.steady_states import find_steady_states_transients
-from nilmtk.disaggregate.accelerators import find_steady_states_fast, pair_fast
+#from nilmtk.disaggregate.accelerators import find_steady_states_fast, pair_fast
 from nilmtk.timeframe import merge_timeframes, TimeFrame
 
 from nilmtk.disaggregate import SupervisedDisaggregator, UnsupervisedDisaggregatorModel

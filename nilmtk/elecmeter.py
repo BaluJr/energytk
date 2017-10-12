@@ -15,7 +15,7 @@ from .electric import Electric
 from nilmtk.exceptions import MeasurementError
 from .utils import flatten_2d_list, capitalise_first_letter
 from nilmtk.timeframegroup import TimeFrameGroup
-from nilmtk.stats.accelerators_stat import get_good_sections_fast
+#from nilmtk.stats.accelerators_stat import get_good_sections_fast
 import nilmtk
 
 
@@ -734,7 +734,7 @@ class ElecMeter(Hashable, Electric):
 
         
         nodes = [NonZeroSections]
-        results_obj = NonZeroSections.results_class()
+        results_obj = NonZeroSections.results_class(self.device['max_sample_period'])
         return self._get_stat_from_cache_or_compute(
             nodes, results_obj, load_kwargs)
 
@@ -792,6 +792,7 @@ class ElecMeter(Hashable, Electric):
 
         # Retrieve usable stats from cache
         key_for_cached_stat = self.key_for_cached_stat(results_obj.name)
+        cached_stat = None
         if loader_kwargs.get('preprocessing') is None:
             cached_stat = self.get_cached_stat(key_for_cached_stat)
             #results_obj.import_from_cache(cached_stat, sections) # Fill results_obj with cache
@@ -841,7 +842,7 @@ class ElecMeter(Hashable, Electric):
             
             results_obj = self._compute_stat(nodes, loader_kwargs).results
             
-            # For Nonzero section exclude where there are zero sections
+            # For Nonzero section exclude where there are not good sections
             if  results_obj.name == 'nonzero_sections':
                 good_sections = self.good_sections(**loader_kwargs)._data
                 results_obj._data = results_obj._data.intersection(good_sections)
@@ -946,7 +947,15 @@ class ElecMeter(Hashable, Electric):
         '''
        
         self.good_sections(chunksize=100000000, verbose = verbose)
-        self.nonzero_sections(chunksize=100000000, verbose = verbose)
+        try:
+            self.nonzero_sections(chunksize=100000000, verbose = verbose)
+        except Exception as e:
+            try:
+                self.clear_cache(verbose = True)
+                self.good_sections(chunksize=100000000, verbose=verbose)
+                self.nonzero_sections(chunksize=100000000, verbose = verbose)
+            except Exception as e:
+                print("STILL BROKEN")
         #self.total_energy(chunksize=1000000, verbose = verbose)
         #self.dropout_rate(verbose=False)#, chunksize=5000000)
         #tst2 = tst.invert()
@@ -966,7 +975,7 @@ class ElecMeter(Hashable, Electric):
         get_cached_stat
         """
         if self.store is not None:
-            key_for_cache = self.key_for_cached_stat('')
+            key_for_cache = self.key_for_cached_stat('nonzero_sections')
             try:
                 self.store.remove(key_for_cache)
             except KeyError:
