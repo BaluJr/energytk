@@ -20,8 +20,9 @@ class NonZeroSectionsResults(Results):
     
     name = "nonzero_sections"
 
-    def __init__(self):
+    def __init__(self, max_sample_rate):
         # Used to know when to combine
+        self.max_sample_rate = max_sample_rate
         super(NonZeroSectionsResults, self).__init__()
 
     def append(self, timeframe, new_results):
@@ -50,22 +51,24 @@ class NonZeroSectionsResults(Results):
         for index, row in self._data.iterrows():
             starts.append(row['sections']['start'])
             ends.append(row['sections']['end'])
-        starts = np.concatenate(starts)
-        ends = np.concatenate(ends)
+        starts = pd.concat(starts)
+        ends = pd.concat(ends)
         
         # Check whether something has to be added in between or before
-        if len(starts) == 0 == len(ends):
-            self._data = TimeFrameGroup()
-        elif len(starts) == 0:
-            starts = np.array([self._data.head(1)['start'][0]])
-        elif len(ends) == 0:
-            ends = np.array([self._data.tail(1)['end'][0]])
-        else:
-            if starts[0] > ends[0]:
-                starts = np.append(np.datetime64(self._data.index[0]), starts)
-            if ends[-1] < starts[-1]:
-                ends = np.append(ends, np.datetime64(self._data.tail(1)['end'][0]))        
-            self._data = TimeFrameGroup(starts_and_ends={'starts': starts, 'ends': ends})
+        # if len(starts) == 0 == len(ends):
+        #     self._data = TimeFrameGroup()
+        #     return
+        # elif len(starts) == 0:
+        #     starts = np.array([self._data.head(1)['start'][0]])
+        # elif len(ends) == 0:
+        #     ends = np.array([self._data.tail(1)['end'][0]])
+        # else:
+        #     if starts[0] > ends[0]:
+        #         starts = np.append(np.datetime64(self._data.index[0]), starts)
+        #     if ends[-1] < starts[-1]:
+        #         ends = np.append(ends, np.datetime64(self._data.tail(1)['end'][0]))
+        rate = pd.Timedelta(seconds=self.max_sample_rate)
+        self._data = TimeFrameGroup(starts_and_ends={'starts': starts, 'ends': ends}).merge_shorter_gaps_than(rate)
 
 
     def unify(self, other):
