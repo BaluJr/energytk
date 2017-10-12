@@ -735,8 +735,14 @@ class ElecMeter(Hashable, Electric):
         
         nodes = [NonZeroSections]
         results_obj = NonZeroSections.results_class(self.device['max_sample_period'])
-        return self._get_stat_from_cache_or_compute(
-            nodes, results_obj, load_kwargs)
+        try:
+            return self._get_stat_from_cache_or_compute(
+                nodes, results_obj, load_kwargs)
+        except TypeError as e:
+            # Return empty Is a workarround because just don't knwo how to handle
+            tmp = NonZeroSections.results_class(self.device['max_sample_period'])
+            tmp.finalize()
+            return tmp
 
     def _get_stat_from_cache_or_compute(self, nodes, results_obj, loader_kwargs):
         """General function for computing statistics and/or loading them from
@@ -945,17 +951,21 @@ class ElecMeter(Hashable, Electric):
         This comes handy when your want to preprocess the dataset in the
         beginning sothat you can access the values in a fast way afterwards.
         '''
-       
-        self.good_sections(chunksize=100000000, verbose = verbose)
+
         try:
+            self.good_sections(chunksize=100000000, verbose = verbose)
             self.nonzero_sections(chunksize=100000000, verbose = verbose)
         except Exception as e:
-            try:
-                self.clear_cache(verbose = True)
-                self.good_sections(chunksize=100000000, verbose=verbose)
-                self.nonzero_sections(chunksize=100000000, verbose = verbose)
-            except Exception as e:
-                print("STILL BROKEN")
+            print("STILL BROKEN")
+
+        # except Exception as e:
+        #     try:
+        #         self.nonzero_sections(chunksize=100000000, verbose = verbose)
+        #         self.clear_cache(verbose = True)
+        #         self.good_sections(chunksize=100000000, verbose=verbose)
+        #         self.nonzero_sections(chunksize=100000000, verbose = verbose)
+        #     except Exception as e:
+        #         print("STILL BROKEN")
         #self.total_energy(chunksize=1000000, verbose = verbose)
         #self.dropout_rate(verbose=False)#, chunksize=5000000)
         #tst2 = tst.invert()
