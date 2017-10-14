@@ -116,7 +116,8 @@ class TimeFrameGroup():
         all_active = (all_events.cumsum()==len(groups))
         starts = all_events.index[all_active]
         ends = all_active.shift(1)
-        ends[0] = False
+        if len(ends > 0):
+            ends[0] = False
         ends = all_events[ends].index
         result = pd.DataFrame({'section_start': starts, 'section_end':ends})
         return TimeFrameGroup(result)
@@ -149,6 +150,9 @@ class TimeFrameGroup():
         relevant_ends = self._df[["section_end"]][gap_larger].reset_index(drop=True)
         return TimeFrameGroup(pd.concat([relevant_starts, relevant_ends], axis=1))
 
+    def remove_before(self, start):
+        self._df  = self._df[self._df["section_end"] > start]
+        self._df[self._df["section_start"] < start]["section_start"] = start
 
     def invert(self, start = None, end = None):
         ''' 
@@ -157,12 +161,32 @@ class TimeFrameGroup():
         TimeFrame and vice versa.
         '''
         if self._df.empty:
+            if not start is None and not end is None:
+                return TimeFrameGroup([TimeFrame(start=start, end=end)])
             return TimeFrameGroup()
 
-        self._df['section_end'] = self._df['section_end'].shift(1)
-        self._df = self._df.dropna().rename(columns={"section_end":"section_start", "section_start": "section_end"})
+        inversion = self._df.copy()
+        if self._df.iloc[-1,:]["section_end"] < end:
+            val_to_append = self._df.iloc[-1,:]["section_start"]
+            inversion['section_end'] = inversion['section_end'].shift(1)
+            row = len(inversion)
+            inversion.loc[row, :] = [start, start]
+            inversion.loc[row, 'section_start'] = end
+            inversion.loc[row, 'section_end'] = val_to_append
 
-        #if not(start is None and end is None):
+        else:
+            inversion['section_end'] = inversion['section_end'].shift(1)
+        if not start is None and start < self._df.iloc[-1,:]['section_start']:
+            inversion.loc[0, 'section_end'] = start
+
+        inversion = inversion.dropna().rename(columns={"section_end":"section_start", "section_start": "section_end"})
+        if not start is None and inversion.loc[0, 'section_start'] < start:
+            inversion.loc[0, 'section_start'] = start
+        if not end is None and inversion.loc[inversion.index[-1], 'section_end'] > end:
+            inversion.loc[inversion.index[-1], 'section_end'] = end
+
+        return TimeFrameGroup(inversion)
+                #if not(start is None and end is None):
         #    raise Exception("Not implemented yet")
 
         #if len(self) < 2:
