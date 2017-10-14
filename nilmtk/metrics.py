@@ -73,7 +73,28 @@ def error_in_assigned_energy(predictions, ground_truth):
     return pd.Series(errors)
 
 
-def error_in_unsupervised_assigned_energy(predictions, ground_truth, tolerance = 0):
+
+def mape(y_true, y_pred):
+    '''
+    This function calculates the mean average percentage error used for 
+    forecasting. It takes to electric as input, whose powerflow function
+    it uses.
+    '''
+    main_meter = 0
+    # 1. Rausfinden ob partitiell ausführbar, dh chunkwise
+    # 2. Schauen ob implementierung in Pandas
+    # 3. Berechnen
+    # 4. Disaggregation plotfunktion schreiben
+    # 5. Wrapper um die ganzen Plot Funktionen herum schreiben
+    # 6. Die versch. Correlations einbauen
+
+    y_true, y_pred = np.array(y_true), np.array(y_pred)
+    return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+
+
+
+
+def error_in_unsupervised_assigned_energy(disaggregations, ground_truth, tolerance = 0):
     """ 
     This is the self made error function for calculating the error of the disaggregation.
     Parameters:
@@ -86,8 +107,8 @@ def error_in_unsupervised_assigned_energy(predictions, ground_truth, tolerance =
 
     # Start from second, becasue first is the disaggregated load
     errors = {}
-    for predictedLoad in predictions:
-        predictedActiveSections = predictedLoad.good_sections()
+    for disag in disaggregations:
+        predictedActiveSections = disag.good_sections()
         for gtLoad in ground_truth:
             gtActiveSections = gtLoad
         both_sets_of_meters = iterate_through_submeters_of_two_metergroups(predictions, ground_truth)
@@ -274,16 +295,6 @@ def f1_score(predictions, ground_truth):
 
     return pd.Series(f1_scores)
 
-
-def mape(electric1, electric2):
-    '''
-    This function calculates the mean average percentage error used for 
-    forecasting. It takes to electric as input, whose powerflow function
-    it uses.
-    '''
-    pass 
-
-    
 
 ##### FUNCTIONS BELOW THIS LINE HAVE NOT YET BEEN CONVERTED TO NILMTK v0.2 #####
 

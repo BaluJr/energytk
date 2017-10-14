@@ -24,11 +24,22 @@ class ExtCorrelationClustererModel(object):
         # The features which are used during the forecasting
         # ('cloudcover', ''), ('humidity', 'relative'), ('temperature', ''), ('humidity', 'absolute'), ('dewpoint', ''), ('windspeed', ''), ('precip', '')
         # ('national', ''), ('school', '')
-        'externalFeatures': [('temperature', ''), ('dewpoint', ''), ('national', ''), ('school', '')], #, 'time'
-        'shifts': list(range(1,5)),#48)), # +[cur*96 for cur in range(7)] + [cur*96*7 for cur in range(4)],
+        'externalFeatures': [('temperature', ''), ('dewpoint', ''), ('precip', ''), ('national', ''), ('school', '')], #, 'time'
+        
+        # How the daytime is regarded
+        'hourFeatures': ['H00-06', "H06-09", "H09-12", "H12-15", "H15-18", "H18-21", "H21-24"],
+
+        # How the weekdays are paired
+        'weekdayFeatures': ["W1-5","W6","W7"],
+
+        # Momentan wird keine Autokorrelation benutzt
+        'shifts': [], #list(range(1,5)) + [cur*96 for cur in range(7)] + [cur*96*7 for cur in range(4)],
 
         # Self correlation resolution (The resolution in which the self resolution is checked)
-        'self_corr_freq': 60,
+        'self_corr_freq': 60*15,
+        
+        # The type of correlation used to build up the vectors
+        'method': 'pearson' #'pearson', 'kendall', 'spearman'
     }
         
     config = {
@@ -53,6 +64,8 @@ class ExtCorrelationClusterer(Clusterer):
     The external data which is used is given in the model as parameter.
     After training, this model contains a vector for each meter.
     Take care, that every element might have separate data to be benchmarked against.
+
+    Ich gehe von niedrigerer Aufloesung aus und dass es in den Speicher passt.
     """
     model_class = ExtCorrelationClustererModel
 
@@ -64,7 +77,7 @@ class ExtCorrelationClusterer(Clusterer):
         super(ExtCorrelationClusterer, self).__init__(model)
 
         
-    def correlate(self,input):
+    def correlate(self,input, weekdays, hours):
         '''
         This is the simple function which is executed in parallel to 
         accellerate the process.
@@ -73,15 +86,28 @@ class ExtCorrelationClusterer(Clusterer):
         '''
         if isinstance(input, int):
             shift = input
-            return current_loadseries.autocorr(shift )
+            return current_loadseries.autocorr(shift)
         else:
+            # Add the external data
             dim = input
-            data = group_data[dim]
-            return current_loadseries.corr(data)
+            corrdataframe = group_data[dim]
+            
+            # Add the time related features
+            for weekday in weekdays:
+                days_of_group = range(int(weekday[1]),int(weekday[3]))
+                corrdataframe[weekday] = current_loadseries.index.weekday.apply(lambda e: e in days_of_group)
+            for hour in hours:
+                days_of_group = range(int(hour[1:3]),int(weekday[5:6]))
+                corrdataframe[weekday] = current_loadseries.index.weekday.apply(lambda e: e in days_of_group)
+
+            # Calculate the correlations
+            correlations = corrdataframe.apply(lambda col: col.corr(current_loadseries.iloc[:,0], method=self.model['method']), axis=0)
+            return correlations
+
+        
 
 
-
-    def cluster(self, meters, n_jobs = -1):
+    def cluster(self, meters, targetFile, n_jobs = -1):
         '''
         Do it in a parallelized way to accellerate it. 
         Take care that only households below a maximum consumption of 32kw are 
@@ -104,13 +130,12 @@ class ExtCorrelationClusterer(Clusterer):
 
         # Prepare result frame
         dims = self.model.params['externalFeatures'] + self.model.params['shifts']
-        self.model.correlations = pd.DataFrame(columns=dims)
-        corrs = self.model.correlations
+        corrs = self.model.correlations = pd.DataFrame(columns=dims + self.model.params['weekdayFeatures'] + self.model.params['hourFeatures'])
 
-        # Load the external data specified in the params (low res -> all in memory)
+        # Load the external data specified in the params
         extDataSet = ExternDataSet(self.model.params['ext_data_dataset'])
         periodsExtData = [int(dev['sample_period']) for dev in extDataSet.metadata['meter_devices'].values()]
-        min_sampling_period = min(periodsExtData + [self.model.params['self_corr_freq']])
+        min_sampling_period = min(periodsExtData + [self.model.params['self_corr_freq']]) * 2
 
         # Group the meters by there zip
         try:
@@ -123,18 +148,19 @@ class ExtCorrelationClusterer(Clusterer):
                 # Load the groupspecific data (weather)
                 group_data = extDataSet.get_data_for_group(zip, group.get_timeframe(), min_sampling_period, self.model.params['externalFeatures'])
                 # Then go through all meters
-                for meter in group.meters:
-                    processed_meters += 1
+                for processed_meters, meter in enumerate(group.meters):
 
-                    # meters load
-                    current_loadseries = meter.power_series_all_data(dtype='float16', load_kwargs={'sample_period':min_sampling_period})
+                    # meters load (Und wieder auf kontinuierliche Zeitreihe bringen)
+                    current_loadseries = meter.power_series_all_data(dtype='float16')#, load_kwargs={'sample_period':min_sampling_period})
+                    current_loadseries = current_loadseries.resample('2s', how='mean').interpolate().resample('2min', how='mean')
+                    
                     #current_loadseries = current_loadseries.tz_localize('UTC')
                
                     #pool = multiprocessing.Pool(processes=n_jobs)
                     #corr_vector = pool.map(correlate, dims)
+
                     corr_vector = []
-                    for dim in dims:
-                        corr_vector.append(self.correlate(dim))
+                    corr_vector.append(self.correlate(difs + self.model.params['weekdayFeatures'] + self.model.params['hourFeatures']))
                     corrs.loc[meter.identifier,:] = corr_vector
 
                     if self.model.config['verbose']:
@@ -147,14 +173,10 @@ class ExtCorrelationClusterer(Clusterer):
         self.model.assignments = assignments  
         self.model.centroids = centroids
 
-
         # Return the clustering result as groups of metering ids (than one can easily select)
         to_list = lambda x: list(x)
         tst = corrs.reset_index().groupby('cluster').agg({'index':to_list})
-        return tst['index'] # Hier sollten Listen der Identifier entstanden sein
-
-
-
+        tst.to_csv(targetFile) # return tst['index'] 
 
 
         
