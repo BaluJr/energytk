@@ -102,9 +102,9 @@ def get_nonzero_sections(df):
     nonzero_sect_starts = (tmp == 1).values
     nonzero_sect_ends = (tmp == -1).values
     #nonzero_sect_starts = df[(tmp == 1).values].index
-    if len(df > 0):
+    if len(df) > 0:
         nonzero_sect_starts[0] = df.iloc[0,0] # = np.append(df.index[0], nonzero_sect_starts)
-        nonzero_sect_ends[-1] = df.iloc[-1,0] #np.append(nonzero_sect_ends, df.index[-1]) # FUCK THIS SHIT!!! Mal verliert er die Timezone
+        nonzero_sect_ends[-1] |= df.iloc[-1,0] #np.append(nonzero_sect_ends, df.index[-1]) # FUCK THIS SHIT!!! Mal verliert er die Timezone
     nonzero_sect_starts = pd.Series(df[nonzero_sect_starts].index)
     nonzero_sect_ends = pd.Series(df[nonzero_sect_ends].index)
     return nonzero_sect_starts, nonzero_sect_ends
