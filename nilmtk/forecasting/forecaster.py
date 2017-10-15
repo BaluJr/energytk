@@ -4,7 +4,6 @@ from nilmtk.timeframe import merge_timeframes, TimeFrame
 from nilmtk.elecmeter import ElecMeter
 from nilmtk.processing import Processing
 
-
 class ForecasterModel(object):
     '''
     As for the disaggregators this model contains the paramters and 

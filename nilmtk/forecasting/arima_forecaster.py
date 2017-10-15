@@ -1,6 +1,7 @@
 import pandas as pd
 from statsmodels.tsa.arima_model import ARIMA
 from matplotlib import pyplot
+from . import Forecaster
 
 class ArimaForecasterModel(object):
     params = {
@@ -9,33 +10,15 @@ class ArimaForecasterModel(object):
         #The number of times that the raw observations are differenced, also called the degree of differencing.
         'd': 2,
         #The size of the moving average window, also called the order of moving average
-        'q': 1 ,
-
-        # Seasonal
-        'P': 3,
-
-        # Seasonal
-        'D': 2,
-       
-        # Seasonal
-        'Q': 2,
-       
-        # Seasonal
-        'S': 2,
-
-        # Die externen Daten werden direkt bei fit mit reingegeben
-        ## The feature, which is used from the external data
-        #'ext_data': 'temperature',  
-        ## The external, which is used to create the vectors for each element, DataSet
-        #'ext_data_dataset': "C:\\Users\\maxim_000\\Documents\\InformatikStudium_ETH\\Masterarbeit\\6_Data\\Tmp\\ExtData.hdf",
+        'q': 1 
     }
 
     model = None
 
 class ArimaForecaster(Forecaster):
-    """This is a forecaster based on Seasonal AutoRegressive Integrated Moving Average with eXogenous regressors
-    https://www.digitalocean.com/community/tutorials/a-guide-to-time-series-forecasting-with-arima-in-python-3
-
+    """This is a forecaster based on the
+    popular AutoRegressive Integrated Moving Average
+    https://machinelearningmastery.com/arima-for-time-series-forecasting-with-python/
     """
 
     model_class = ArimaForecasterModel
@@ -45,12 +28,23 @@ class ArimaForecaster(Forecaster):
         Constructor of this class which takes an optional model as input.
         If no model is given, it createsa default one.
         """
-        super(ANNForecaster, self).__init__(model)
+        super(ArimaForecaster, self).__init__(model)
 
     def train(self, meters, verbose = False):
-        meters.power_series_all_data(sample_period=900
-                                     )
-        params = self.model.parameters
+        #powerflow = pd.read_csv('15minSampledLoadProfileForForecast.csv') #meters.power_series_all_data(sample_period=900, verbose = True)
+        #powerflow[:96*7].plot()
+        #plt.show()
+        #powerflow.dropna(inplace = True)
+        #powerflow = powerflow[:10000]
+        #load = powerflow.iloc[:,1].values
+        #extern = powerflow.set_index(['2011-03-21 23:00:00'])
+        params = self.model.params
+
+        wpi1 = requests.get('http://www.stata-press.com/data/r12/wpi1.dta').content
+        data = pd.read_stata(BytesIO(wpi1))
+        data.index = data.t
+        #data.plot()
+        #plt.show()
         self.model.model = ARIMA(series, order=(params.p,params.params.d,params.p))
         model_fit = model.fit(disp=0)
         
