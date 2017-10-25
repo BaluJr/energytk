@@ -36,7 +36,7 @@ class LstmForecasterModel():
         'epochs': 100,
 
         # How many inputs used per day  
-        'timesteps': 14,
+        'timesteps': 48,
         # 10 Tage auf einmal
         'batch_size': 14 * 10,
 
@@ -49,8 +49,18 @@ class LstmForecasterModel():
         # The hidden dimensionality of the LSTM-NN
         'lstm_dim': 25,
 
-        'input_dim': 2
+        'input_dim': 2,
 
+
+
+        # The features which are used as input
+        'externalFeatures': [('temperature', '')],#, ('national', ''), ('school', '')],#, ('dewpoint', '')], #, 'time'
+        
+        # How the daytime is regarded
+        'hourFeatures': [('hour', '00-06'), ('hour', "06-09"), ('hour', "09-12"), ('hour', "12-15"), ('hour', "15-18"), ('hour', "18-21"), ('hour', "21-24")],
+
+        # How the weekdays are paired
+        'weekdayFeatures': [('week', "0-5"),('week', "5-6"),('week',"6-7")],
     }
 
 
@@ -65,15 +75,15 @@ class LstmForecaster(Forecaster):
     
     # The related model
     model_class = LstmForecasterModel
-
-
+    
+    #region Generation of data
     def functionality_test(self):
         x2 = C.input_variable(**Sequence[Tensor[2]])
         x = C.sequence.input_variable(2)
         x0 = np.reshape(np.arange(6,dtype=np.float32),(1,3,2))
         # trigram expansion: augment each item of the sequence with its left and right neighbor
         my_trigram = Sequential([tuple(C.layers.Delay(T) for T in (-1,0,1)),  # create 3 shifted versions
-                                   C.layers.splice])                            # concatenate them
+                                   C.layers.splice])                          # concatenate them
         y = my_trigram(x)
         result = y(x0)
         tst = result
@@ -90,7 +100,6 @@ class LstmForecaster(Forecaster):
         tst2 = Y['train'][0:3]
         self.train(X,Y)
 
-
     def generate_solar_data(self, input_url, time_steps, normalize=1, val_size=0.1, test_size=0.1):
         """
         generate sequences to feed to rnn based on data frame with solar panel data
@@ -98,6 +107,7 @@ class LstmForecaster(Forecaster):
          (solar.current is the current output in Watt, solar.total is the total production
           for the day so far in Watt hours)
         """
+
         # try to find the data file local. If it doesn't exists download it.
         cache_path = os.path.join("data", "iot")
         cache_file = os.path.join(cache_path, "solar.csv")
@@ -112,7 +122,7 @@ class LstmForecaster(Forecaster):
         
         # normalize data
         df['solar.current'] /= normalize
-        df['solar.total'] /= normalize
+        df['solar.total']   /= normalize
     
         # add the maximum values per day
         df["date"] = df.index.date
@@ -167,6 +177,8 @@ class LstmForecaster(Forecaster):
         for ds in ["train", "val", "test"]:
             result_y[ds] = np.array(result_y[ds])
         return result_x, result_y
+    #endregion
+
 
 
     def create_model(self, x):
@@ -218,6 +230,7 @@ class LstmForecaster(Forecaster):
         Does the training of the neural network. Each load chunk is translated into 
         multiple minibatches used for training the network.
         '''
+
         # C.try_set_default_device(C.cpu())
         X = meters
         Y = verbose

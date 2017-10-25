@@ -4,3 +4,4 @@ from .cnn_forecaster import CnnForecaster
 from .forecaster import Forecaster
 from .sarimax_forecaster import SarimaxForecaster
 from .arima_forecaster import ArimaForecaster
+from .reference_forecaster import ReferenceForecaster

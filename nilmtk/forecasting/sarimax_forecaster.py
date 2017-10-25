@@ -6,24 +6,29 @@ from . import Forecaster
 import matplotlib.pyplot as plt
 import requests
 from io import BytesIO
+from nilmtk import TimeFrame, TimeFrameGroup
+import pickle as pckl
+
+#https://www.analyticsvidhya.com/blog/2016/02/time-series-forecasting-codes-python/
 
 class SarimaxForecasterModel(object):
     params = {
         # The number of lag observations included in the model, also called the lag order.
-        'p': 1,
+        'p': 2,
         #The number of times that the raw observations are differenced, also called the degree of differencing.
         'd': 1,
         #The size of the moving average window, also called the order of moving average
-        'q': 1 ,
+        'q': 3,
 
         # Seasonal
-        'P': 3,
+        'P': 2,
         # Seasonal
-        'D': 2,       
+        'D': 1,       
         # Seasonal
-        'Q': 2,       
+        'Q': 3,       
+
         # Seasonal
-        'S': 2,
+        'S': 24,
 
         # Die externen Daten werden direkt bei fit mit reingegeben
         ## The feature, which is used from the external data
@@ -50,40 +55,60 @@ class SarimaxForecaster(Forecaster):
         super(SarimaxForecaster, self).__init__(model)
 
 
-    def train(self, meters, verbose = False):
-        #powerflow = pd.read_csv('15minSampledLoadProfileForForecast.csv') #meters.power_series_all_data(sample_period=900, verbose = True)
-        #powerflow[:96*7].plot()
-        #plt.show()
-        #powerflow.dropna(inplace = True)
-        #powerflow = powerflow[:10000]
-        #load = powerflow.iloc[:,1].values
-        #extern = powerflow.set_index(['2011-03-21 23:00:00'])
+    def train(self, meters, extDataSet, verbose = False):
         params = self.model.params
+        
+        # 1. Load the data
+        timeframe = TimeFrame(start=pd.Timestamp("1.1.2016", tz = 'UTC'), end = pd.Timestamp("30.05.2016", tz = 'UTC'))
+        sections = TimeFrameGroup([TimeFrame(start=pd.Timestamp("1.1.2016", tz = 'UTC'), end = pd.Timestamp("30.05.2016", tz = 'UTC'))])
+        #powerflow = meters.power_series_all_data(verbose = True, sample_period=3600, sections=sections).dropna()
+        
+        # Kommt von 820
+        powerflow = pckl.load(open("./ForecastingBenchmark.pckl", "rb"))
+        learn = powerflow[-960:-96]
+        extData = extDataSet.get_data_for_group('820', timeframe, 60*60, [('temperature','')])
 
-        wpi1 = requests.get('http://www.stata-press.com/data/r12/wpi1.dta').content
-        data = pd.read_stata(BytesIO(wpi1))
-        data.index = data.t
-        #data.plot()
-        #plt.show()
-        self.model.model = model = SARIMAX(endog = data.wpi, order=(params['p'],params['d'],params['q'])) #exog = extern
+        # Load the external data specified in the params
+        #periodsExtData = [int(dev['sample_period']) for dev in extDataSet.metadata['meter_devices'].values()]
+        #min_sampling_period = min(periodsExtData + [self.model.params['self_corr_freq']]) * 2
+
+        # 2. Make data stationary   
+
+
+        # 3. Define the best paramters
+
+
+        # 4. Fit the model
+        self.model.model_sarimax = model = SARIMAX(endog = learn, order=(params['p'],params['d'],params['q']), 
+                                                   seasonal_order = (params['P'],params['D'],params['Q'], params['S']),
+                                                   enforce_stationarity = False, enforce_invertibility = False)#, exog = extData[-960:-96])
         model_fit = model.fit(disp=True)
-        
-        self.model.model = model = ARIMA(endog = data.wpi, order=(params['p'],params['d'],params['q'])) #exog = extern
-        model_fit2 = model.fit(disp=True)
+        #self.model.model_arima = model = ARIMA(endog = learn.values, order=(params['p'],params['d'],params['q']), exog = extData[1:-96])
+        #model_fit2 = model.fit(disp=True)
 
-        i = 1
+        # Do a forecast for so far unknown region and scale back
+        forecast = model_fit.predict(start=len(powerflow)-96, end=len(powerflow), dynamic=True)
+        #forecast2 = model_fit2.predict(start=len(powerflow)-96, end=len(powerflow), dynamic=True)
         
-        if verbose:
-            # plot summary and residual errors
-            print(model_fit.summary())
-            print("############ ############ ############ ############ ############")
-            print(model_fit2.summary())
-            residuals =pd.DataFrame(model_fit.resid)
-            residuals.plot()
-            pyplot.show()
-            residuals.plot(kind='kde')
-            pyplot.show()
-            print(residuals.describe())
+        # Plot the forecast
+        series_to_plot = pd.concat([powerflow, forecast], axis = 1).fillna(0)
+        series_to_plot.plot()
+        pyplot.show()
+        i = abs['tst']
+
+        # Plot residual errors
+        residuals =pd.DataFrame(model_fit.resid)
+        residuals.plot()
+        pyplot.show()
+        residuals.plot(kind='kde')
+        pyplot.show()
+        print(residuals.describe())
+        
+        # Print the summary 
+        print(model_fit.summary())
+        print("############ ############ ############ ############ ############")
+        print(model_fit2.summary())
+
         
 
     def forecast(self):

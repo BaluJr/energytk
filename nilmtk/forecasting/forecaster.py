@@ -52,6 +52,25 @@ class Forecaster(Processing):
         self.model = model;
 
 
+
+    def _addTimeRelatedFeatures(self, chunk, ):
+        '''
+        Add the time related features
+        '''
+        weekdays = self.model.params['weekdayFeatures']
+        for weekday in weekdays:
+            idx = ('weekday', weekday)
+            days_of_group = set(range(int(weekday[0]),int(weekday[2])))
+            chunk[idx] = chunk.index.weekday
+            chunk[idx] = chunk[idx].apply(lambda e, dog=days_of_group: e in dog)
+        hours = self.model.params['hourFeatures']
+        for hour in hours:
+            idx = ('hour', hour)
+            hours_of_group = set(range(int(hour[:2]),int(hour[3:])))
+            chunk[idx] = chunk.index.hour
+            chunk[idx] = chunk[idx].apply(lambda e, hog = hours_of_group: e in hog)
+
+
     def forecast(self, mains, output_datastore = ""):
         """Passes each chunk from mains generator to disaggregate_chunk() and
         passes the output to _write_disaggregated_chunk_to_datastore()
