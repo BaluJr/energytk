@@ -5,8 +5,11 @@ import os
 import pandas as pd
 import random
 import time
-import cntk as C
 from .forecaster import Forecaster
+
+import cntk as C
+from cntk.layers import Sequential
+from cntk.layers.typing import Tensor, Sequence
 
 try:
     from urllib.request import urlretrieve
@@ -33,7 +36,7 @@ class LstmForecasterModel():
         'epochs': 100,
 
         # How many inputs used per day  
-        'timesteps': 14,
+        'timesteps': 48,
         # 10 Tage auf einmal
         'batch_size': 14 * 10,
 
@@ -41,11 +44,23 @@ class LstmForecasterModel():
         'normalize': 20000,
 
         # Dimensionality of LSTM cell
-        'h_dims': 14,
+        'h_dim': 14,
 
         # The hidden dimensionality of the LSTM-NN
-        'lstm_dim': 25
+        'lstm_dim': 25,
 
+        'input_dim': 1,
+
+
+
+        # The features which are used as input
+        'externalFeatures': [('temperature', '')],#, ('national', ''), ('school', '')],#, ('dewpoint', '')], #, 'time'
+        
+        # How the daytime is regarded
+        'hourFeatures': [('hour', '00-06'), ('hour', "06-09"), ('hour', "09-12"), ('hour', "12-15"), ('hour', "15-18"), ('hour', "18-21"), ('hour', "21-24")],
+
+        # How the weekdays are paired
+        'weekdayFeatures': [('week', "0-5"),('week', "5-6"),('week',"6-7")],
     }
 
 
@@ -60,8 +75,23 @@ class LstmForecaster(Forecaster):
     
     # The related model
     model_class = LstmForecasterModel
+    
+    #region Generation of data
+    def functionality_test(self):
+        x2 = C.input_variable(**Sequence[Tensor[2]])
+        x = C.sequence.input_variable(2)
+        x0 = np.reshape(np.arange(6,dtype=np.float32),(1,3,2))
+        # trigram expansion: augment each item of the sequence with its left and right neighbor
+        my_trigram = Sequential([tuple(C.layers.Delay(T) for T in (-1,0,1)),  # create 3 shifted versions
+                                   C.layers.splice])                          # concatenate them
+        y = my_trigram(x)
+        result = y(x0)
+        tst = result
 
     def do_a_testrun(self):
+        #self.functionality_test()
+        #return
+
         params = self.model.params
         np.random.seed(0)
         X, Y = self.generate_solar_data("https://www.cntk.ai/jup/dat/solar.csv", 
@@ -77,6 +107,7 @@ class LstmForecaster(Forecaster):
          (solar.current is the current output in Watt, solar.total is the total production
           for the day so far in Watt hours)
         """
+
         # try to find the data file local. If it doesn't exists download it.
         cache_path = os.path.join("data", "iot")
         cache_file = os.path.join(cache_path, "solar.csv")
@@ -91,7 +122,7 @@ class LstmForecaster(Forecaster):
         
         # normalize data
         df['solar.current'] /= normalize
-        df['solar.total'] /= normalize
+        df['solar.total']   /= normalize
     
         # add the maximum values per day
         df["date"] = df.index.date
@@ -146,16 +177,43 @@ class LstmForecaster(Forecaster):
         for ds in ["train", "val", "test"]:
             result_y[ds] = np.array(result_y[ds])
         return result_x, result_y
+    #endregion
 
-    def next_batch(x, y, ds):
+
+
+    def create_model(self, x):
         """
-        Get the next batch for training
+        Create the model for time series prediction
         """
+        with C.layers.default_options(initial_state = 0.1):
+            m = C.layers.Recurrence(C.layers.LSTM(self.model.params['lstm_dim'], self.model.params['h_dim']))(x)
+            m = C.sequence.last(m)
+            m = C.layers.Dropout(0.2)(m)
+            m = C.layers.Dense(1)(m)
+            return m
+
+
+    def next_batch(self, x, y, ds):
+        """get the next batch to process"""
+
         def as_batch(data, start, count):
-            return data[start:start + count]
+            part = []
+            for i in range(start, start + count):
+                part.append(data[i])
+            return part
+        
         BATCH_SIZE = self.model.params['batch_size']
-        for i in range(0, len(x[ds]), BATCH_SIZE):
-            yield as_batch(X[ds], i, BATCH_SIZE), as_batch(Y[ds], i, BATCH_SIZE)
+        for i in range(0, len(x[ds])-BATCH_SIZE, BATCH_SIZE):
+            yield as_batch(x[ds], i, BATCH_SIZE), as_batch(y[ds], i, BATCH_SIZE)
+
+
+    def get_mse(self, X,Y,labeltxt, trainer, x, l):
+        result = 0.0
+        for x1, y1 in self.next_batch(X, Y, labeltxt):
+            eval_error = trainer.test_minibatch({x : x1, l : y1})
+            result += eval_error
+        return result/len(X[labeltxt])
+        
 
 
 
@@ -172,17 +230,18 @@ class LstmForecaster(Forecaster):
         Does the training of the neural network. Each load chunk is translated into 
         multiple minibatches used for training the network.
         '''
+
         # C.try_set_default_device(C.cpu())
         X = meters
         Y = verbose
         params = self.model.params
 
         # Hier muss ich spaeter mal mehrere Features rein geben pro step 
-        x = C.sequence.input_variable(1)                                # Das fuegt glaube sofort schon eine Dyn Achse ein
+        x = C.sequence.input_variable(shape=params['input_dim'], is_sparse = False)     # Das fuegt glaube sofort schon eine Dyn Achse ein
         # create the model
         z = self.create_model(x)
         # expected output (label), also the dynamic axes of the model output is specified as the model of the label input 
-        l = C.input_variable(1, dynamic_axes=z.dynamic_axes, name="y")  # Das ist die gleiche dyn Achse die aus x in z rein kam
+        l = C.input_variable(1, dynamic_axes=z.dynamic_axes, name="y")                  # Das ist die gleiche dyn Achse die aus x in z rein kam
 
         # Loss and error function 
         loss = C.squared_error(z, l)
@@ -254,37 +313,3 @@ class LstmForecaster(Forecaster):
 
         
       
-
-    def create_model(self, x):
-        """
-        Create the model for time series prediction
-        """
-        with C.layers.default_options(initial_state = 0.1):
-            m = C.layers.Recurrence(C.layers.LSTM(self.model.params['h_dims']))(x)
-            m = C.sequence.last(m)
-            m = C.layers.Dropout(0.2)(m)
-            m = C.layers.Dense(1)(m)
-            return m
-
-    def next_batch(self, x, y, ds):
-        """get the next batch to process"""
-
-        def as_batch(data, start, count):
-            part = []
-            for i in range(start, start + count):
-                part.append(data[i])
-            return part
-        
-        BATCH_SIZE = self.model.params['batch_size']
-        for i in range(0, len(x[ds])-BATCH_SIZE, BATCH_SIZE):
-            yield as_batch(x[ds], i, BATCH_SIZE), as_batch(y[ds], i, BATCH_SIZE)
-
-    # validate
-    def get_mse(self, X,Y,labeltxt, trainer, x, l):
-        result = 0.0
-        for x1, y1 in self.next_batch(X, Y, labeltxt):
-            eval_error = trainer.test_minibatch({x : x1, l : y1})
-            result += eval_error
-        return result/len(X[labeltxt])
-        
-

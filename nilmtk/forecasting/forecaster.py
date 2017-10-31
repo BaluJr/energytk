@@ -3,6 +3,8 @@ from datetime import datetime
 from nilmtk.timeframe import merge_timeframes, TimeFrame
 from nilmtk.elecmeter import ElecMeter
 from nilmtk.processing import Processing
+import pandas as pd 
+
 
 class ForecasterModel(object):
     '''
@@ -52,23 +54,57 @@ class Forecaster(Processing):
         self.model = model;
 
 
+    #region Data augmentation help functions
 
-    def _addTimeRelatedFeatures(self, chunk, ):
+    def _addShiftsToChunkAndReduceToValid(self, chunk, shifts, num_models):
+        '''
+        This function takes the current chunk of the meter and adapts it sothat
+        it can be used for training. That means it extends the dataframe by the 
+        missing features we want to learn.
+        '''        
+        # Determine the shifts that are required. All in memory since only a few values
+        chunk = chunk.copy()
+        all_shifts = set()
+        for shift in shifts:
+            all_shifts.update(range(shift, shift+ num_models))
+
+        # Compute the stock being up (1) or down (0) over different day offsets compared to current dat closing price
+        for i in all_shifts:
+            chunk[('shifts', str(i))] = chunk[('power','active')].shift(i)    # i: number of look back days
+
+        return chunk.drop(chunk.index[chunk[('shifts',str(max(all_shifts)))].isnull()])
+           
+    
+    def _addTimeRelatedFeatures(self, chunk, weekdayFeatures, hourFeatures):
         '''
         Add the time related features
         '''
-        weekdays = self.model.params['weekdayFeatures']
-        for weekday in weekdays:
-            idx = ('weekday', weekday)
+        chunk = chunk.copy()
+        idxs = weekdayFeatures
+        for idx in idxs:
+            weekday = idx[1]
             days_of_group = set(range(int(weekday[0]),int(weekday[2])))
             chunk[idx] = chunk.index.weekday
             chunk[idx] = chunk[idx].apply(lambda e, dog=days_of_group: e in dog)
-        hours = self.model.params['hourFeatures']
-        for hour in hours:
-            idx = ('hour', hour)
+        idxs = hourFeatures     #self.model.params['hourFeatures']
+        for idx in idxs:
+            hour = idx[1]
             hours_of_group = set(range(int(hour[:2]),int(hour[3:])))
             chunk[idx] = chunk.index.hour
             chunk[idx] = chunk[idx].apply(lambda e, hog = hours_of_group: e in hog)
+        return chunk
+
+    def _addExternalData(self, chunk, ext_dataset, section, external_features):
+        # Kommt von 820
+        if len(external_features) > 0: 
+            extData = ext_dataset.get_data_for_group('820', section, 60*15, external_features)[1:]
+        return pd.concat([chunk, extData], axis=1)
+
+
+    #endregion
+
+
+
 
 
     def forecast(self, mains, output_datastore = ""):

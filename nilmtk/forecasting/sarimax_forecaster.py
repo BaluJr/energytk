@@ -59,12 +59,14 @@ class SarimaxForecaster(Forecaster):
         params = self.model.params
         
         # 1. Load the data
-        timeframe = TimeFrame(start=pd.Timestamp("1.1.2016", tz = 'UTC'), end = pd.Timestamp("30.05.2016", tz = 'UTC'))
-        sections = TimeFrameGroup([TimeFrame(start=pd.Timestamp("1.1.2016", tz = 'UTC'), end = pd.Timestamp("30.05.2016", tz = 'UTC'))])
-        #powerflow = meters.power_series_all_data(verbose = True, sample_period=3600, sections=sections).dropna()
-        
+        timeframe = TimeFrame(start=pd.Timestamp("1.1.2016", tz = 'UTC'), end = pd.Timestamp("15.03.2017", tz = 'UTC'))
+        sections = TimeFrameGroup([TimeFrame(start=pd.Timestamp("1.1.2016", tz = 'UTC'), end = pd.Timestamp("15.03.2017", tz = 'UTC'))]) #30.05.2016
+        #powerflow = meters.power_series_all_data(verbose = True, sample_period=900, sections=sections).dropna()
+        #pckl.dump(powerflow, open("./ForecastingBenchmark15min.pckl", "wb"))
+        #return
+
         # Kommt von 820
-        powerflow = pckl.load(open("./ForecastingBenchmark.pckl", "rb"))
+        powerflow = pckl.load(open("./ForecastingBenchmark15min.pckl", "rb"))
         learn = powerflow[-960:-96]
         extData = extDataSet.get_data_for_group('820', timeframe, 60*60, [('temperature','')])
 

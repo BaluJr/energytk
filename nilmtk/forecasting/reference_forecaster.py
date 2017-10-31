@@ -37,6 +37,5 @@ class ReferenceForecaster(Forecaster):
         powerflow = pckl.load(open("./ForecastingBenchmark.pckl", "rb"))        
         prediction_error = (powerflow - powerflow.shift(24)) / (powerflow)
 
-
     def forecast(self):
         pass     
