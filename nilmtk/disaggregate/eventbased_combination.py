@@ -934,80 +934,80 @@ class EventbasedCombination(SupervisedDisaggregator):
         loader = []
         steady_states_list = []
         transients_list = []   
-        #try:
-        #    self.model = model = pckl.load(open('E:disaggregation_events/' + str(metergroup.identifier) + '.pckl', 'rb'))
-        #    model.appliances = []
-        #except:
-        #    for i in range(len(metergroup)):
-        #        overall_powerflow.append(None)
-        #        steady_states_list.append([])
-        #        transients_list.append([])
-        #        loader.append(metergroup.meters[i].load(cols=self.model.params['cols'], chunksize = 31000000, **kwargs))
-        #    try:
-        #        while(True):
-        #            input_params = []
-        #            for i in range(len(metergroup)):
-        #                power_dataframe = next(loader[i]).dropna()
-        #                if overall_powerflow[i] is None:
-        #                    overall_powerflow[i] = power_dataframe.resample('5min').agg('mean')  
-        #                else:
-        #                    overall_powerflow[i] = overall_powerflow[i].append(power_dataframe.resample('5min', how='mean'))
-        #                indices = np.array(power_dataframe.index)
-        #                values = np.array(power_dataframe.iloc[:,0])
-        #                input_params.append((indices, values, model.params['min_n_samples'], model.params['state_threshold'], model.params['noise_level']))
-        #            #states_and_transients, tst_original_fast, tst_original  = [], [], []
-        #            #for i in range(2,len(metergroup)):
-        #            #    states, transients = find_transients_fast(input_params[i])
-        #            #    steady_states_list[i].append(states)
-        #            #    transients_list[i].append(transients)
-        #            states_and_transients = pool.map(find_transients_fast, input_params)
-        #            for i in range(len(metergroup)):
-        #                steady_states_list[i].append(states_and_transients[i][0])
-        #                transients_list[i].append(states_and_transients[i][1])
+        try:
+            self.model = model = pckl.load(open('E:disaggregation_events/' + str(metergroup.identifier) + '.pckl', 'rb'))
+            model.appliances = []
+        except:
+            for i in range(len(metergroup)):
+                overall_powerflow.append(None)
+                steady_states_list.append([])
+                transients_list.append([])
+                loader.append(metergroup.meters[i].load(cols=self.model.params['cols'], chunksize = 31000000, **kwargs))
+            try:
+                while(True):
+                    input_params = []
+                    for i in range(len(metergroup)):
+                        power_dataframe = next(loader[i]).dropna()
+                        if overall_powerflow[i] is None:
+                            overall_powerflow[i] = power_dataframe.resample('5min').agg('mean')  
+                        else:
+                            overall_powerflow[i] = overall_powerflow[i].append(power_dataframe.resample('5min', how='mean'))
+                        indices = np.array(power_dataframe.index)
+                        values = np.array(power_dataframe.iloc[:,0])
+                        input_params.append((indices, values, model.params['min_n_samples'], model.params['state_threshold'], model.params['noise_level']))
+                    #states_and_transients, tst_original_fast, tst_original  = [], [], []
+                    #for i in range(2,len(metergroup)):
+                    #    states, transients = find_transients_fast(input_params[i])
+                    #    steady_states_list[i].append(states)
+                    #    transients_list[i].append(transients)
+                    states_and_transients = pool.map(find_transients_fast, input_params)
+                    for i in range(len(metergroup)):
+                        steady_states_list[i].append(states_and_transients[i][0])
+                        transients_list[i].append(states_and_transients[i][1])
 
-        #    except StopIteration:
-        #        pass
-        #    # set model (timezone is lost within c programming)
-        #    for i in range(len(metergroup)):
-        #        model.steady_states.append(pd.concat(steady_states_list[i]).tz_localize('utc'))
-        #        model.transients.append(pd.concat(transients_list[i]).tz_localize('utc')) #pd.merge(self.steady_states[0], self.steady_states[1], how='inner', suffixes=['_1', '_2'], indicator=True, left_index =True, right_index =True)
-        #        model.transients[-1].index.rename("starts", inplace = True)
-        #    pckl.dump(model, open('E:disaggregation_events/' + str(metergroup.identifier) + '.pckl', 'wb'))
-        #t2 = time.time()
-        #print("Eventloading: " + str(t2-t1))
+            except StopIteration:
+                pass
+            # set model (timezone is lost within c programming)
+            for i in range(len(metergroup)):
+                model.steady_states.append(pd.concat(steady_states_list[i]).tz_localize('utc'))
+                model.transients.append(pd.concat(transients_list[i]).tz_localize('utc')) #pd.merge(self.steady_states[0], self.steady_states[1], how='inner', suffixes=['_1', '_2'], indicator=True, left_index =True, right_index =True)
+                model.transients[-1].index.rename("starts", inplace = True)
+            pckl.dump(model, open('E:disaggregation_events/' + str(metergroup.identifier) + '.pckl', 'wb'))
+        t2 = time.time()
+        print("Eventloading: " + str(t2-t1))
 
         ## Create a fourth powerflow with events, common to all powerflows
-        ## model.transients.append(self.separate_simultaneous_events(self.model.transients))
+        model.transients = self.separate_simultaneous_events(self.model.transients)
         
-        ## Accelerate for testing
-        #for i in range(len(model.transients)):
-        #    self.model.transients[i] = self.model.transients[i][:len(self.model.transients[i])] # 3000
-        #    self.model.steady_states[i] = self.model.steady_states[i][:len(self.model.steady_states[i])] # 3000
-        #    self.model.overall_powerflow[i] = self.model.overall_powerflow[i][:self.model.steady_states[i].index[-1] + pd.Timedelta('5min')] # 80000
+        # Accelerate for testing
+        for i in range(len(model.transients)):
+            self.model.transients[i] = self.model.transients[i][:len(self.model.transients[i])] # 3000
+            self.model.steady_states[i] = self.model.steady_states[i][:len(self.model.steady_states[i])] # 3000
+            self.model.overall_powerflow[i] = self.model.overall_powerflow[i][:self.model.steady_states[i].index[-1] + pd.Timedelta('5min')] # 80000
 
-        ## 2. Separate segments between base load        
-        #t1 = time.time()
-        #input_params = []
-        #for i in range(len(model.transients)):
-        #    input_params.append((self.model.transients[i], self.model.steady_states[i], self.model.params['state_threshold'], self.model.params['noise_level']))
-        #    #self.model.transients[i] = add_segments_improved(input_params[-1])
-        #self.model.transients = pool.map(add_segments_improved, input_params)
-        #print('Segment separation: ' + str(time.time() - t1))
+        # 2. Separate segments between base load        
+        t1 = time.time()
+        input_params = []
+        for i in range(len(model.transients)):
+            input_params.append((self.model.transients[i], self.model.steady_states[i], self.model.params['state_threshold'], self.model.params['noise_level']))
+            #self.model.transients[i] = add_segments_improved(input_params[-1])
+        self.model.transients = pool.map(add_segments_improved, input_params)
+        print('Segment separation: ' + str(time.time() - t1))
 
 
-        ## 3. Create all events which per definition have to belong together (tuned Hart)
-        #t2 = time.time()
-        #result = []
-        #input_params = []
-        #for i in range(len(model.transients)):
-        #    input_params.append((model.transients[i], self.model.params['state_threshold']))
-        #    #result.append(find_appliances(input_params[-1]))
-        #result = pool.map(find_appliances, input_params)
-        #for i in range(len(model.transients)):
-        #    model.transients[i] = result[i]['transients']
-        #    model.clusterer[i] = result[i]['clusterer']
-        #print("Find appliances: " + str(time.time() - t2))
-        #pckl.dump(model, open('E:disaggregation_events/' + str(metergroup.identifier) + '_appfound.pckl', 'wb'))
+        # 3. Create all events which per definition have to belong together (tuned Hart)
+        t2 = time.time()
+        result = []
+        input_params = []
+        for i in range(len(model.transients)):
+            input_params.append((model.transients[i], self.model.params['state_threshold']))
+            #result.append(find_appliances(input_params[-1]))
+        result = pool.map(find_appliances, input_params)
+        for i in range(len(model.transients)):
+            model.transients[i] = result[i]['transients']
+            model.clusterer[i] = result[i]['clusterer']
+        print("Find appliances: " + str(time.time() - t2))
+        pckl.dump(model, open('E:disaggregation_events/' + str(metergroup.identifier) + '_appfound.pckl', 'wb'))
 
 
         ## 4. Create the appliances (Pay attention, id per size and subtype) and rest powerflow
@@ -1049,25 +1049,52 @@ class EventbasedCombination(SupervisedDisaggregator):
         print("Stored: " + str(time.time()-t4))
 
     
-
-    def separate_simultaneous_events(self, transient_list):
+    def separate_simultaneous_events(self, transients):
         '''
         This function finds the common transients in the list of transients.
         The equal ones are removed from the timelines and then returned as 
         a dedicated timeline.
         '''
+
+
         # When only one powerflow no simultaneous events
-        if len(transient_list) <= 1:
+        if len(transients) <= 1:
             return
+        new_transients = []        
+        
+        # First look for events over all phases
+        common_transients = pd.concat(transients, join='inner', axis=1)
+        transitions = common_transients['active transition']
+        abc_same_size = transitions.std(axis=1) < 0.1 * transitions.mean(axis=1)
+        if (abc_same_size.sum() / len(common_transients)) > 0.1:
+            raise('There is a three phase appliance, which is not supported yet.')
+                
+        # Find simultaneous events of same size
+        for a, b in [(0,1),(0,2),(1,2)]:
+            common_transients = pd.concat([transients[a], transients[b]], join='inner', axis=1)
+            transitions = common_transients['active transition']
+            same_size = transitions.std(axis=1) < 0.1 * transitions.mean(axis=1)
+            if (same_size.sum() / len(common_transients)) > 0.1:
+                # Combine and remove duplicate column
+                common_transients['active transition'] = common_transients['active transition'].sum(axis=1)
+                common_transients[:1]['signature']
+                siglength = common_transients.iloc[1,:]['signature'].apply(lambda e: len(e)).min()
+                common_transients['signature'] = common_transients['signature'].applymap(lambda e,l=siglength: e[:l])
+                common_transients['signature'] = common_transients['signature'].sum(axis=1)
+                common_transients = common_transients.loc[:,~common_transients.columns.duplicated()]
+                
+                # Process signature, sothat only what we need 
+                up = common_transients['active transition'] > 0
+                common_transients.loc[up, 'signature'] = common_transients.loc[up, 'signature'].apply(lambda sig, l=siglength:  np.cumsum(np.array(sig).reshape(-1,l).sum(axis=0)).max())
+                common_transients.loc[~up, 'signature'] = common_transients.loc[~up, 'signature'].apply(lambda sig, l=siglength:  np.cumsum(np.array(sig).reshape(-1,l).sum(axis=0)).max())                
+                
+                # Remove from other powerflows and add to new
+                new_transients.append(common_transients)
+                transients[a].drop(common_transients.index, inplace = True)
+                transients[b].drop(common_transients.index, inplace = True)
 
-        # Create sets and assign values
-        simultaneous = reduce(lambda left, right: pd.merge(left, right, how='inner', left_index =True, right_index =True), transient_list)
-        simultaneous = simultaneous[abs(simultaneous) > 1000].dropna()
-
-        # Remove the simultaneous events from the previous timeflows
-        for transients in transient_list:
-            transients.drop(simultaneous.index, inplace = True)
-        return pd.DataFrame(simultaneous.sum(axis=1), columns=['active transition'])
+        transients.extend(new_transients)
+        return transients
 
  
 
@@ -1629,7 +1656,7 @@ class EventbasedCombination(SupervisedDisaggregator):
             steady_states.append(s.tz_localize('utc'))
             transients.append(t.tz_localize('utc'))
 
-        transients.append(self.separate_simultaneous_events(transients))
+        transients = self.separate_simultaneous_events(transients)
         # For now ignoring the first transient
         # transients = transients[1:]
 
