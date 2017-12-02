@@ -742,7 +742,7 @@ class ElecMeter(Hashable, Electric):
             # Return empty Is a workarround because just don't knwo how to handle
             tmp = NonZeroSections.results_class(self.device['max_sample_period'])
             tmp.finalize()
-            return tmp
+            return tmp._data
 
     def _get_stat_from_cache_or_compute(self, nodes, results_obj, loader_kwargs):
         """General function for computing statistics and/or loading them from
@@ -881,7 +881,7 @@ class ElecMeter(Hashable, Electric):
                 return res
             else:
                 return pd.Series(res[ac_types], index=ac_types)
-        return res
+        return res._data
 
     def _compute_stat(self, nodes, loader_kwargs):
         """
@@ -975,7 +975,7 @@ class ElecMeter(Hashable, Electric):
 
 
 
-    def clear_cache(self, verbose=False):
+    def clear_cache(self, caches_to_delete = None, verbose=False):
         """
         See Also
         --------
@@ -984,15 +984,20 @@ class ElecMeter(Hashable, Electric):
         key_for_cached_stat
         get_cached_stat
         """
+        if caches_to_delete is None:
+            caches_to_delete = ['nonzero_sections', 'good_sections', 'total_energy']
+        elif not isinstance(caches_to_delete, list):
+            caches_to_delete = list(caches_to_delete)
         if self.store is not None:
-            key_for_cache = self.key_for_cached_stat('nonzero_sections')
-            try:
-                self.store.remove(key_for_cache)
-            except KeyError:
-                if verbose:
-                    print("No existing cache for", key_for_cache)
-            else:
-                print("Removed", key_for_cache)
+            for cache in caches_to_delete:
+                key_for_cache = self.key_for_cached_stat(cache)
+                try:
+                    self.store.remove(key_for_cache)
+                except KeyError:
+                    if verbose:
+                        print("No existing cache for", key_for_cache)
+                else:
+                    print("Removed", key_for_cache)
 
     def get_cached_stat(self, key_for_stat):
         """

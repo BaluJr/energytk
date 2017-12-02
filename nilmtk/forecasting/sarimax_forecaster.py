@@ -28,7 +28,7 @@ class SarimaxForecasterModel(object):
         'Q': 3,       
 
         # Seasonal
-        'S': 24,
+        'S': 96,
 
         # Die externen Daten werden direkt bei fit mit reingegeben
         ## The feature, which is used from the external data
@@ -67,7 +67,7 @@ class SarimaxForecaster(Forecaster):
 
         # Kommt von 820
         powerflow = pckl.load(open("./ForecastingBenchmark15min.pckl", "rb"))
-        learn = powerflow[-960:-96]
+        learn = powerflow[-1920:-96]
         extData = extDataSet.get_data_for_group('820', timeframe, 60*60, [('temperature','')])
 
         # Load the external data specified in the params

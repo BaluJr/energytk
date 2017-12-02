@@ -3,5 +3,5 @@ This namespace contains all functionality which is necessary to do the clusterin
 '''
 from .correlation_clusterer import CorrelationClusterer, CorrelationClustererModel
 from .extcorrelation_clusterer import ExtCorrelationClusterer, ExtCorrelationClustererModel
-
+from .custom_gmm import CustomGaussianMixture
 

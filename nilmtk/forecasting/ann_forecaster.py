@@ -1,5 +1,6 @@
 from statsmodels.tsa.arima_model import ARIMA
 import cntk as C
+from cntk.logging.progress_print import TensorBoardProgressWriter
 from cntk.debugging import debug_model
 import numpy as np
 from .forecaster import Forecaster
@@ -55,7 +56,10 @@ class AnnForecasterModel(Sequence):
         'debug': False,
         
         # Amount of data used for validation
-        'validation_quota': 0.1
+        'validation_quota': 0.1,
+
+        # The folder where the tensorflow logs are placed
+        'tensorboard_dict': "E:Tensorboard/"
     }
 
 
@@ -167,24 +171,27 @@ class AnnForecaster(Forecaster):
         multiple minibatches used for training the network.
         '''
         params = self.model.params
-        
+
         # A) Load the data
         section = TimeFrame(start=pd.Timestamp("1.1.2016", tz = 'UTC'), end = pd.Timestamp("15.03.2017", tz = 'UTC'))
-        #section = meters.get_timeframe(intersection_instead_union=True)
         sections = TimeFrameGroup([TimeFrame(start=pd.Timestamp("1.1.2016", tz = 'UTC'), end = pd.Timestamp("30.05.2016", tz = 'UTC'))])
+        powerflow = pckl.load(open("./ForecastingBenchmark15min.pckl", "rb"))
+        powerflow = pd.DataFrame(powerflow)
+        #sections = TimeFrameGroup([meters.get_timeframe(intersection_instead_union=True)])
         #powerflow = meters.power_series_all_data(verbose = True, sample_period=3600, sections=sections).dropna()
-        powerflow = pckl.load(open("./ForecastingBenchmark15min.pckl", "rb"))        
-        
-        # B) Prepare the data
-        power_column = [('power', 'active')] #meters._convert_physical_quantity_and_ac_type_to_cols(physical_quantity = 'power', ignore_missing_columns = True)['cols']
-        chunk = self._addTimeRelatedFeatures(chunk, params['weekdayFeatures'], params['hourFeatures'])
-        chunk = self._addExternalData(chunk, extDataSet, section, self.model.params['externalFeatures'])
-        chunk = self._addShiftsToChunkAndReduceToValid(chunk, params['shifts'], params['amount_of_models'])
+        #powerflow = next(meters.load(verbose = True, sample_period=3600, sections=sections)).dropna()
         
         # C) Create the model
         modelnumber = self.model.params['amount_of_models']
         for forecasthorizont in range(modelnumber):
             self._model_creation(forecasthorizont)
+
+        # B) Prepare the data
+        power_column = [('power', 'active')] #meters._convert_physical_quantity_and_ac_type_to_cols(physical_quantity = 'power', ignore_missing_columns = True)['cols']
+        chunk = self._addTimeRelatedFeatures(powerflow, params['weekdayFeatures'], params['hourFeatures'])
+        chunk = self._addExternalData(chunk, extDataSet, section, self.model.params['externalFeatures']) #sections[0]
+        chunk = self._addShiftsToChunkAndReduceToValid(chunk, params['shifts'], params['amount_of_models'])
+        
 
         # D) Arrange the labels
         train_test_mask = np.random.rand(len(chunk)) < 0.8
@@ -283,7 +290,8 @@ class AnnForecaster(Forecaster):
         lr_schedule = C.learning_rate_schedule(0.01, C.UnitType.minibatch)
         moment_schedule = C.momentum_schedule([0.99,0.9], 1000)
         learner = C.adam(z.parameters, lr_schedule, minibatch_size = 1, momentum = moment_schedule)
-        self.model[forecasthorizon]['trainer'] = C.Trainer(z, (loss, label_error), [learner]) # label_error
+        tensorboard_writer = TensorBoardProgressWriter(freq=10, log_dir=self.model.params['tensorboard_dict'], model=z)
+        self.model[forecasthorizon]['trainer'] = C.Trainer(z, (loss, label_error), [learner], tensorboard_writer) # label_error
 
 
 

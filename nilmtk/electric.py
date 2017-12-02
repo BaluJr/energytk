@@ -206,7 +206,7 @@ class Electric(MeterSeries):
         # https://github.com/nilmtk/nilmtk/issues/407
         # The following line is a work around for this bug.
         power_series.name = self.label()
-        ax = power_series.plot(ax=ax, **plot_kwargs)
+        ax = pd.DataFrame(power_series).plot(ax=ax, **plot_kwargs) # need to cast sothat sharex included -
         ax.set_ylabel('Power ({})'.format(unit))
         if plot_legend:
             plt.legend()

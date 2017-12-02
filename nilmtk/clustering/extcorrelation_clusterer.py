@@ -12,6 +12,8 @@ from sklearn.cluster import KMeans, AgglomerativeClustering
 import sklearn.metrics
 from .clusterer import Clusterer
 from nilmtk import DataSet, ExternDataSet
+import time
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 
 import pickle as pckl
@@ -26,11 +28,12 @@ class ExtCorrelationClustererModel(object):
         # ('national', ''), ('school', '')
         'externalFeatures': [('temperature', ''), ('dewpoint', ''), ('precip', ''), ('national', ''), ('school', '')], #, 'time'
         
+
         # How the daytime is regarded
-        'hourFeatures': ['H00-06', "H06-09", "H09-12", "H12-15", "H15-18", "H18-21", "H21-24"],
+        'hourFeatures': ['00-06', "06-09", "09-12", "12-15", "15-18", "18-21", "21-24"],
 
         # How the weekdays are paired
-        'weekdayFeatures': ["W1-5","W6","W7"],
+        'weekdayFeatures': ["0-5","5-6","6-7"],
 
         # Momentan wird keine Autokorrelation benutzt
         'shifts': [], #list(range(1,5)) + [cur*96 for cur in range(7)] + [cur*96*7 for cur in range(4)],
@@ -76,38 +79,65 @@ class ExtCorrelationClusterer(Clusterer):
         """
         super(ExtCorrelationClusterer, self).__init__(model)
 
-        
-    def correlate(self,input, weekdays, hours):
+    def set_up_corrdataframe(self, dim, weekdays, dayhours):
         '''
         This is the simple function which is executed in parallel to 
         accellerate the process.
         Each process only gets the location of its target timeline as 
         an input. It then only takes the data from the global element.
         '''
-        if isinstance(input, int):
-            shift = input
-            return current_loadseries.autocorr(shift)
-        else:
-            # Add the external data
-            dim = input
-            corrdataframe = group_data[dim]
+        # Fastest 0.34 for 20
+        def tst3(current_loadseries, days_of_group):
+            days = current_loadseries.index.weekday.values
+            result = np.ones(len(current_loadseries)).astype(bool)
+            for day in days_of_group:
+                result |= (days == day)
+            return pd.Series(result)
+        # bit slower 0.49 for 20
+        def tst(current_loadseries, days_of_group):
+            t = np.in1d(current_loadseries[:-1].index.weekday.values, days_of_group)
+        # Slow 1.47 for 20
+        def tst2(current_loadseries, days_of_group):
+            t = current_loadseries[:-1].index.weekday.apply(lambda e, dog=days_of_group: e in dog)
             
-            # Add the time related features
-            for weekday in weekdays:
-                days_of_group = range(int(weekday[1]),int(weekday[3]))
-                corrdataframe[weekday] = current_loadseries.index.weekday.apply(lambda e: e in days_of_group)
-            for hour in hours:
-                days_of_group = range(int(hour[1:3]),int(weekday[5:6]))
-                corrdataframe[weekday] = current_loadseries.index.weekday.apply(lambda e: e in days_of_group)
 
-            # Calculate the correlations
-            correlations = corrdataframe.apply(lambda col: col.corr(current_loadseries.iloc[:,0], method=self.model['method']), axis=0)
-            return correlations
+        # Add the time related features
+        global corrdataframe
+        corrdataframe = group_data[dim]
+        days = current_loadseries[:-1].index.weekday.values
+        for weekday in weekdays:
+            idx = ('weekday', weekday)
+            days_of_group = set(range(int(weekday[0]),int(weekday[2])))
+            corrdataframe[idx] = False
+            for day in days_of_group:
+                corrdataframe[idx] |= (days == day)
+        hours = current_loadseries[:-1].index.hour.values
+        for dayhour in dayhours:
+            idx = ('hour', dayhour)
+            hours_of_group = set(range(int(dayhour[:2]),int(dayhour[3:])))
+            corrdataframe[idx] = False
+            for hour in hours_of_group:
+                corrdataframe[idx] |= (hours == hour)
+
+        
+    def correlate(self):
+        '''
+        This is the simple function which is executed in parallel to 
+        accellerate the process.
+        Each process only gets the location of its target timeline as 
+        an input. It then only takes the data from the global element.
+        '''
+        #if isinstance(input, int):
+        #    shift = input
+        #    return current_loadseries.autocorr(shift)
+
+        correlations = corrdataframe.apply(lambda col, method = self.model.params['method']: col.corr(current_loadseries, method=method), axis=0)
+        return correlations.fillna(0)
 
         
 
 
-    def cluster(self, meters, targetFile, n_jobs = -1):
+    def cluster(self, meters, extDataSet, targetFile, n_jobs = -1):
         '''
         Do it in a parallelized way to accellerate it. 
         Take care that only households below a maximum consumption of 32kw are 
@@ -119,9 +149,10 @@ class ExtCorrelationClusterer(Clusterer):
         meters: The meters which shall be clustered
         '''
 
-        # We need global variables sothat they can be accessed in the subprocesses
+        # We need global variables if we want to use multiprocessing
         global current_loadseries
         global group_data
+        global corrdataframe
         clusterer_timeseries = []
         
         # Declare amount of processes
@@ -130,53 +161,66 @@ class ExtCorrelationClusterer(Clusterer):
 
         # Prepare result frame
         dims = self.model.params['externalFeatures'] + self.model.params['shifts']
-        corrs = self.model.correlations = pd.DataFrame(columns=dims + self.model.params['weekdayFeatures'] + self.model.params['hourFeatures'])
+        weekdayFeatures = [('weekday', cur) for cur in self.model.params['weekdayFeatures']]
+        hourFeatures = [('hour', cur) for cur in self.model.params['hourFeatures']]
+        corrs = self.model.correlations = pd.DataFrame(columns=dims +  weekdayFeatures + hourFeatures)
 
         # Load the external data specified in the params
-        extDataSet = ExternDataSet(self.model.params['ext_data_dataset'])
         periodsExtData = [int(dev['sample_period']) for dev in extDataSet.metadata['meter_devices'].values()]
         min_sampling_period = min(periodsExtData + [self.model.params['self_corr_freq']]) * 2
 
         # Group the meters by there zip
         try:
-            corrs = pckl.load(open("coors.pckl",'rb'))
+            corrs = pckl.load(open("E:/coors.pckl",'rb'))
         except:
             metergroups = meters.groupby('zip', use_appliance_metadata = False)
             processed_meters = 0
             for zip in metergroups:
                 group = metergroups[zip]
                 # Load the groupspecific data (weather)
-                group_data = extDataSet.get_data_for_group(zip, group.get_timeframe(), min_sampling_period, self.model.params['externalFeatures'])
+                group_data = extDataSet.get_data_for_group(zip, group.get_timeframe(), 300, self.model.params['externalFeatures']) # min_sampling_period
                 # Then go through all meters
                 for processed_meters, meter in enumerate(group.meters):
 
                     # meters load (Und wieder auf kontinuierliche Zeitreihe bringen)
                     current_loadseries = meter.power_series_all_data(dtype='float16')#, load_kwargs={'sample_period':min_sampling_period})
-                    current_loadseries = current_loadseries.resample('2s', how='mean').interpolate().resample('2min', how='mean')
+                    if processed_meters == 0:
+                        self.set_up_corrdataframe(dims,self.model.params['weekdayFeatures'], self.model.params['hourFeatures'])
+                
+                    #if processed_meters != 0:
+                    #    newSeries = pd.Series(index = current_loadseries.asfreq('4s').index)
+                    #    resampledload = current_loadseries.combine_first(newSeries)
+                    #    resampledload = resampledload.interpolate()
+                    #    current_loadseries = resampledload.resample('2min', how='mean')
                     
-                    #current_loadseries = current_loadseries.tz_localize('UTC')
                
+
                     #pool = multiprocessing.Pool(processes=n_jobs)
                     #corr_vector = pool.map(correlate, dims)
 
                     corr_vector = []
-                    corr_vector.append(self.correlate(difs + self.model.params['weekdayFeatures'] + self.model.params['hourFeatures']))
+                    t1 = time.time()
+                    corr_vector = self.correlate()
                     corrs.loc[meter.identifier,:] = corr_vector
+                    t2 = time.time()
+
 
                     if self.model.config['verbose']:
                         print('Correlation set up for {0} - {1}/{2}'.format(meter,processed_meters,len(group.meters)))
             pckl.dump(corrs, open("coors.pckl",'wb'))
 
         # Do the clustering after the created vectors
-        centroids, assignments  = self._cluster_vectors(corrs)
+        centroids, assignments  = self._cluster_vectors(corrs, 5)
         corrs['cluster'] = assignments
         self.model.assignments = assignments  
         self.model.centroids = centroids
 
         # Return the clustering result as groups of metering ids (than one can easily select)
         to_list = lambda x: list(x)
-        tst = corrs.reset_index().groupby('cluster').agg({'index':to_list})
-        tst.to_csv(targetFile) # return tst['index'] 
+        result = corrs.reset_index().groupby('cluster').agg({'index':to_list})
+        result.rename(columns={'index': 'elecmeters'})
+        result.to_csv(targetFile) # return result['index'] 
+        return result
 
 
         
@@ -201,11 +245,11 @@ class ExtCorrelationClusterer(Clusterer):
            
         # Preprocess dataframe
         mappings = [(dim, None) for dim in correlation_dataframe.columns]
-
-
         mapper = DataFrameMapper(mappings) 
         clusteringInput = mapper.fit_transform(correlation_dataframe.copy())
-    
+        scaler = StandardScaler()
+        clusteringInput = scaler.fit_transform(clusteringInput)
+
         # Do the clustering
         num_clusters = -1
         silhouette = -1
@@ -241,8 +285,8 @@ class ExtCorrelationClusterer(Clusterer):
                     return k_means_cluster_centers[num_clusters]
                 else:
                     return np.array([0])
-
-        return k_means_cluster_centers[num_clusters].flatten(), k_means_labels[num_clusters]
+        centers = scaler.inverse_transform(k_means_cluster_centers[num_clusters])
+        return centers.flatten(), k_means_labels[num_clusters]
 
     
 

@@ -110,8 +110,8 @@ class TimeFrameGroup():
         '''
         all_events = pd.Series()
         for group in groups:
-            all_events = all_events.append(pd.Series(1, index=group._df['section_start']))
-            all_events = all_events.append(pd.Series(-1, index=group._df['section_end']))
+            all_events = all_events.append(pd.Series(1, index=pd.DatetimeIndex(group._df['section_start'])))
+            all_events = all_events.append(pd.Series(-1, index=pd.DatetimeIndex(group._df['section_end'])))
         all_events.sort_index(inplace=True)
         all_active = (all_events.cumsum()==len(groups))
         starts = all_events.index[all_active]
@@ -143,6 +143,9 @@ class TimeFrameGroup():
     def merge_shorter_gaps_than(self, threshold):
         if self._df.empty:
             return TimeFrameGroup()
+
+        if isinstance(threshold, str):
+            threshold = pd.Timedelta(threshold)
 
         gap_larger = ((self._df["section_start"].shift(-1) - self._df["section_end"]) > threshold)
         gap_larger.iloc[-1] = True # keep last
@@ -240,6 +243,9 @@ class TimeFrameGroup():
         last = self._df.iloc[i,:]
         self._df.drop(self._df.index[i], inplace = True)
         return TimeFrame(last['section_start'], last['section_end'])
+
+    def drop_all_but(self,i):
+        return TimeFrameGroup(self._df[i:i+1].reset_index(drop=True))
 
     #def diff(self, other):
     #    '''

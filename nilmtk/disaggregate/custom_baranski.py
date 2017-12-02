@@ -393,6 +393,8 @@ class CustomBaranski(UnsupervisedDisaggregator):
     def _cluster_on_offs(self, events, max_num_clusters=3, exact_num_clusters=None):
         ''' This function clusters together the on and off events to find applicances 
             that belong together.
+
+            Das hier war der Hack mit dem Geometrischen Clustern. Momentan ungenutzt.
         '''
         
         allEvents = list(events['pos'][0]) + [abs(k) for k in events['neg'][0]]* 3
@@ -445,22 +447,10 @@ class CustomBaranski(UnsupervisedDisaggregator):
         return k_means_labels[num_clusters]
 
 
-    def _pandas_sklearn_test(self):
-        data = pd.DataFrame({'pet':      ['cat', 'dog', 'dog', 'fish', 'cat', 'dog', 'cat', 'fish'], 
-                             'children': [4., 6, 3, 3, 2, 3, 5, 4],
-                             'salary':   [90, 24, 44, 27, 32, 59, 36, 27]})
-        mapper = DataFrameMapper([('pet',None),('children', None)], input_df = True) 
-             #('pet', sklearn.preprocessing.LabelBinarizer()),
-             #(['children'], sklearn.preprocessing.StandardScaler())
-        mapper.fit_transform(data.copy())
-        print(str(mapper.transformed_names_))
+
 
     #endregion
 
-    def _speedtest():
-        s = pd.Series(np.random.randint(0,100,size=(1000000)))
-        d = s.diff()
-        target = d[d.abs() > 30]
         
     def _save(self, events, what='events'):
         #file = open("tmpEvents.pckle", "w+")

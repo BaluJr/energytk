@@ -754,7 +754,7 @@ class MeterGroup(Electric):
             tz = None if start.tz is None else start.tz.zone
             #tz = self.get_timeframe().start.tz
             index = pd.date_range(
-                start.tz_localize(None), section.end.tz_localize(None), tz=tz,
+                start, section.end, tz=tz,
                 closed='left', freq=freq)
             chunk = combine_chunks_from_generators(
                 index, columns, self.meters, load_kwargs)
@@ -997,10 +997,10 @@ class MeterGroup(Electric):
                      " meters.  This will be fixed...")
             
             #raise("Klappt das wirklich?")
-            good_sections = TimeFrameGroup([self.get_timeframe()])
+            good_sections = [TimeFrameGroup([self.get_timeframe()])]
             for meter in self.meters:
-                tmp = meter.good_sections()
-                good_sections = good_sections.intersection(tmp._data) # HIER DESTSTELLEN WARUM DAS NICHT GEHT. IHM FEHLT ._data, Dann normal disagg, Clustern checken
+                good_sections.append(meter.good_sections())
+            good_sections = TimeFrameGroup.intersect_many(good_sections) # HIER DESTSTELLEN WARUM DAS NICHT GEHT. IHM FEHLT ._data, Dann normal disagg, Clustern checken
             return good_sections
             #return self.meters[0].good_sections(**load_kwargs)
         else:
@@ -1840,7 +1840,8 @@ def replace_dataset(identifier, dataset):
 def iterate_through_submeters_of_two_metergroups(master, slave):
     """
     Finds the corresponding meters in the two metergroups by their IDs
-    and by replacing the dataset in them.
+    and by replacing the dataset in them. 
+    So to pair to meters, one has to give them the same ID!
 
     Parameters
     ----------
@@ -1923,7 +1924,7 @@ def combine_chunks_from_generators(index, columns, meters, load_kwargs):
             del column
             cumulator_col = cumulator_arr[:,i] # Call by reference
             where_both_are_nan = np.isnan(cumulator_col) & np.isnan(aligned)
-            np.nansum([cumulator_col, aligned], axis=0, out=cumulator_col,  # HIER IN DER FUNKTION WIRD DIE SPALTE GESETZT
+            np.nansum([cumulator_col, aligned], axis=0, out=cumulator_col,  # HIER IN DER FUNKTION WIRD ADDIERT UND DIE SPALTE GESETZT 
                       dtype=DTYPE)
             cumulator_col[where_both_are_nan] = np.NaN
             del aligned

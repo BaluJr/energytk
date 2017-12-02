@@ -42,10 +42,188 @@ from warnings import warn
 from .metergroup import MeterGroup
 from .metergroup import iterate_through_submeters_of_two_metergroups
 from .electric import align_two_meters
+from .elecmeter import ElecMeterID
+from nilmtk.timeframegroup import TimeFrameGroup
+import itertools
 
 
+metrics_label_dictionary = {
+    'A_AssignedEnergy': "",
+    'B_PercentageAssignedEnergy': "",
+    'C_DeviationOfAssignedEnergy': "",
+    'D_RMSE': "",
+    'E_MAE': "",
+    'F_': "",
+    'G_Precision': "",
+    'H_Recall': "",
+    'i_F1':"",
+    'J_TotalEnergyCorrectlyAssigned': "",
+    "K": "",
+    "MAPE":"",
+    "NRSME":""
+}
+metrics_func_dictionary = {
+    'A_AssignedEnergy': "",
+    'B_PercentageAssignedEnergy': "",
+    'C_DeviationOfAssignedEnergy': "",
+    'D_RMSE': "",
+    'E_MAE': "",
+    'F_': "",
+    'G_Precision': "",
+    'H_Recall': "",
+    'i_F1':"",
+    'J_TotalEnergyCorrectlyAssigned': "",
+    "K": "",
+    "MAPE":"",
+    "NRSME":""
+}
+#### 
+
+def calculate_all_errors(metrics, prediction, groud_truth):
+    '''
+    Calculates the given metrics for the output
+    '''
+    metric_names = [metrics_label_dictionary[metric] for metric in metrics]
+    result = pd.DataFrame(columns = metric_names)
+    for appliance in ground_truth:
+        cur_metric_results = []
+        for metric in metrics:
+            fn = metrics_func_dictionary[metric]
+            cur_metric_results = fn(prediction, appliance)
+        result.loc[appliance.name] = cur_metric_results
+
+#def plot_errors_as_latex_table(df_errors, caption = None):
+#    '''
+#    This function calculates the metrics and returns the code for a latextable.
+#    '''
+#    if caption == None:
+#        caption = "NILM Metrics"
+
+#    metricsstring = ""
+#    metrics = 
+#    for metric in metrics:
+#        metricsstring += str(metric)  + "&"
+#        metricsstring += str(metric)
+
+
+#    tableheader = "\begin{table}[] \centering \caption{My caption} \
+#    \label{my-label} \
+#    \begin{tabular}{|l|l|} \
+#    \hline \hline \
+#    \textbf{Element} & \textbf{Metric}    \\ \hline"
+
+#    for 
+#    Electromechanical      & Digital                \\ \hline
+#    One-way communication  & Two-way communicaton   \\ \hline
+#    Centralized generation & Distributed generation \\ \hline
+#    Few sensors            & Sensors throughout     \\ \hline
+#    Manual monitoring      & Self-monitoring        \\ \hline
+#    Manual restoration     & Self-healing           \\ \hline
+#    Failures and blackouts & Adaptive and islanding \\ \hline
+#    Limited control        & Pervasive Control      \\ \hline
+#    Few customer choices   & Many customer choices  \\ \hline
+#    \end{tabular}
+#    \end{table}
+
+
+def plot_forecasting(trained, learnspan,  forecast, forecastspan):
+    '''
+    Plots the forecast and the real powerflow next to each other.
+    trained: Das gemachte Training
+    l
+    '''
+    metric_names = [metrics_label_dictionary[metric] for metric in metrics]
+    result = pd.DataFrame(columns = metric_names)
+    for appliance in ground_truth:
+        cur_metric_results = []
+        for metric in metrics:
+            fn = metrics_func_dictionary[metric]
+            cur_metric_results = fn(prediction, appliance)
+        result.loc[appliance.name] = cur_metric_results
+
+
+#### Meta funktion
+
+# FUCK! Ich muss das doch noch mal alles anpassen, da die normale Def in der Arbeit eben nich 
+# Anlagen genau funktioniert.
+
+def create_temp_elecmeter_identifiers(n):
+    """
+    This function creates temporary Ids which are used to 
+    pair together all elements.
+
+    Parameters
+    ----------
+    n : Amount of elecmeter identifiers
+
+    Returns
+    -------
+    ElecMeterID or MeterGroupID with dataset replaced with `dataset`
+    """
+    ids = []
+    for i in range(1, n+1):
+        ids.append(ElecMeterID(instance=i, building=0, dataset="temp"))
+    return ids
+
+
+def calculate_error_for_unsupervised(predictions, ground_truth):
+    """
+    In the completly unsupervised case it is not clear which disaggregated appliance 
+    belongs to which object of the ground_truth.
+    In a first step it just calculates the values by random mixing. 
+    This can be achieved by temporarily changing the ids to different pairs.
+    """
+    
+    # Get the one with the smaller length
+    if len(ground_truth) > len(predictions):
+        fewer_meters = predictions.meters
+        more_meters = ground_truth.meters
+    else:
+        fewer_meters = ground_truth.meters
+        more_meters = predictions.meters
+    identifiers = create_temp_elecmeter_identifiers(len(fewer_meters))
+
+    # Backup the identifiers
+    backup_fewer = []
+    for i in range(len(fewer_meters)):
+        backup_fewer = fewer_meters[i].identifier
+        fewer_meters[i].identifier = identifiers[i]
+    backup_more = []
+    for gt in more_meters:
+        backup_more.append(gt.identifier)
+        gt.identifier = ElecMeterID(instance=999, building=0, dataset="temp")
+
+    # Die jetzt assignen
+    least_error = np.inf
+    least_error_perm = None
+    for perm in itertools.permutations(more_meters,len(fewer_meters)):
+        # Restore the original identifiert
+        for i in range(len(more_meters)):
+            more_meters[i].identifier = ElecMeterID(instance=999, building=0, dataset="temp")
+        # Set the new ones for the current permutation
+        for j in range(len(perm)):
+            perm[j].identifier = identifiers[j]
+        # Calc the metric with the current permutation set up (idents changed since by-reference) 
+        error = error_in_assigned_energy(predictions, ground_truth)
+        if error < least_error:
+            least_error = error
+            least_error_perm = perm
+
+    # Restore the original identifiers
+    for i in range(len(fewer_meters)):
+        fewer_meters[i].identifier = backup_fewer[i]
+    for i in range(len(more_meters)):
+        more_meters[i] = backup_more[i] 
+
+
+
+##################################
+# Error metrics from disaggregation point of view (Also for forecasting)
+
+# Original
 def error_in_assigned_energy(predictions, ground_truth):
-    """Compute error in assigned energy.
+    """ A) Compute error in assigned energy. OK
+    The difference between the energy within the original energy and the current one.
 
     .. math::
         error^{(n)} = 
@@ -66,73 +244,47 @@ def error_in_assigned_energy(predictions, ground_truth):
     both_sets_of_meters = iterate_through_submeters_of_two_metergroups(
         predictions, ground_truth)
     for pred_meter, ground_truth_meter in both_sets_of_meters:
-        sections = pred_meter.good_sections()
+        sections = pred_meter.good_sections().intersection(ground_truth_meter.good_sections())        
         ground_truth_energy = ground_truth_meter.total_energy(sections=sections)
         predicted_energy = pred_meter.total_energy(sections=sections)
         errors[pred_meter.instance()] = np.abs(ground_truth_energy - predicted_energy)
     return pd.Series(errors)
 
 
-
-def mape(y_true, y_pred):
-    '''
-    This function calculates the mean average percentage error used for 
-    forecasting. It takes to electric as input, whose powerflow function
-    it uses.
-    '''
-    main_meter = 0
-    # 1. Rausfinden ob partitiell ausführbar, dh chunkwise
-    # 2. Schauen ob implementierung in Pandas
-    # 3. Berechnen
-    # 4. Disaggregation plotfunktion schreiben
-    # 5. Wrapper um die ganzen Plot Funktionen herum schreiben
-    # 6. Die versch. Correlations einbauen
-
-    y_true, y_pred = np.array(y_true), np.array(y_pred)
-    return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
-
-
-
-
-def error_in_unsupervised_assigned_energy(disaggregations, ground_truth, tolerance = 0):
-    """ 
-    This is the self made error function for calculating the error of the disaggregation.
-    Parameters:
-    predictions: MeterGroup
-        The result of the disaggregation
-    ground_truth: MeterGroup
-        The original appliances recorded by plugs and included within the 
-        source dataset.
+def percetage_of_assigned_energy(predictions, ground_truth):
+    """ B) Compute percentage of the total energy, that is assigned. OK
     """
-
-    # Start from second, becasue first is the disaggregated load
     errors = {}
-    for disag in disaggregations:
-        predictedActiveSections = disag.good_sections()
-        for gtLoad in ground_truth:
-            gtActiveSections = gtLoad
-        both_sets_of_meters = iterate_through_submeters_of_two_metergroups(predictions, ground_truth)
+    both_sets_of_meters = iterate_through_submeters_of_two_metergroups(
+        predictions, ground_truth)
     for pred_meter, ground_truth_meter in both_sets_of_meters:
-        sections = pred_meter.good_sections()
+        sections = TimeFrameGroup.intersect_many(pred_meter.good_sections(),  ground_truth.good_sections())
         ground_truth_energy = ground_truth_meter.total_energy(sections=sections)
         predicted_energy = pred_meter.total_energy(sections=sections)
-        errors[pred_meter.instance()] = np.abs(ground_truth_energy - predicted_energy)
+        errors[pred_meter.instance()] = ground_truth_energy / predicted_energy
     return pd.Series(errors)
 
 
-def fraction_energy_assigned_correctly(predictions, ground_truth):
-    '''Compute fraction of energy assigned correctly
+def deviation_of_assigned_energy(predictions, ground_truth):
+    """ C) Error metric
+    """
+    errors = {}
+    both_sets_of_meters = iterate_through_submeters_of_two_metergroups(
+        predictions, ground_truth)
+    for pred_meter, ground_truth_meter in both_sets_of_meters:
+        sections = pred_meter.good_sections().intersection(ground_truth_meter.good_sections())        
+        ground_truth_energy = ground_truth_meter.total_energy(sections=sections)
+        predicted_energy = pred_meter.total_energy(sections=sections)
+        errors[pred_meter.instance()] = np.abs(ground_truth_energy - predicted_energy) / ground_truth_energy
+    return pd.Series(errors)
+
+# Original
+def rms_error_power(predictions, ground_truth):
+    '''D) RMSE, RMSD
+    Compute RMS error in assigned power
     
     .. math::
-        fraction = 
-        \\sum_n min \\left ( 
-        \\frac{\\sum_n y}{\\sum_{n,t} y}, 
-        \\frac{\\sum_n \\hat{y}}{\\sum_{n,t} \\hat{y}} 
-        \\right )
-
-    Ignores distinction between different AC types, instead if there are 
-    multiple AC types for each meter then we just take the max value across
-    the AC types.
+            error^{(n)} = \\sqrt{ \\frac{1}{T} \\sum_t{ \\left ( y_t - \\hat{y}_t \\right )^2 } }
 
     Parameters
     ----------
@@ -140,30 +292,57 @@ def fraction_energy_assigned_correctly(predictions, ground_truth):
 
     Returns
     -------
-    fraction : float in the range [0,1]
-        Fraction of Energy Correctly Assigned.
+    error : pd.Series
+        Each index is an meter instance int (or tuple for MeterGroups).
+        Each value is the RMS error in predicted power for that appliance.
     '''
 
+    error = {}
 
-    predictions_submeters = MeterGroup(meters=predictions.submeters().meters)
-    ground_truth_submeters = MeterGroup(meters=ground_truth.submeters().meters)
+    both_sets_of_meters = iterate_through_submeters_of_two_metergroups(
+        predictions, ground_truth)
+    for pred_meter, ground_truth_meter in both_sets_of_meters:
+        sum_of_squared_diff = 0.0
+        n_samples = 0
+        for aligned_meters_chunk in align_two_meters(pred_meter, 
+                                                     ground_truth_meter):
+            diff = aligned_meters_chunk.icol(0) - aligned_meters_chunk.icol(1)
+            diff.dropna(inplace=True)
+            sum_of_squared_diff += (diff ** 2).sum()
+            n_samples += len(diff)
+
+        error[pred_meter.instance()] = math.sqrt(sum_of_squared_diff / n_samples)
+
+    return pd.Series(error)
+
+def mae(predictions, ground_truth):
+    ''' E) This function calculates the mean average percentage error used for 
+    forecasting. It takes to electric as input, whose powerflow function
+    it uses.
+    '''
+    error = {}
+    both_sets_of_meters = iterate_through_submeters_of_two_metergroups(
+        predictions, ground_truth)
+    for pred_meter, ground_truth_meter in both_sets_of_meters:
+        sum_of_absolute_error = 0.0
+        n_samples = 0
+        for aligned_meters_chunk in align_two_meters(pred_meter, 
+                                                     ground_truth_meter):
+            diff = aligned_meters_chunk.icol(0) - aligned_meters_chunk.icol(1)
+            diff.dropna(inplace=True)
+            sum_of_absolute_error += diff.abs().sum()
+            n_samples += len(diff)
+
+        error[pred_meter.instance()] = sum_of_absolute_error / n_samples
+
+    return pd.Series(error)
 
 
-    fraction_per_meter_predictions = predictions_submeters.fraction_per_meter()
-    fraction_per_meter_ground_truth = ground_truth_submeters.fraction_per_meter()
-
-    fraction_per_meter_ground_truth.index = fraction_per_meter_ground_truth.index.map(lambda meter: meter.instance)
-    fraction_per_meter_predictions.index = fraction_per_meter_predictions.index.map(lambda meter: meter.instance)
-
-    fraction = 0
-    for meter_instance in predictions_submeters.instance():
-        fraction += min(fraction_per_meter_ground_truth[meter_instance],
-                        fraction_per_meter_predictions[meter_instance])
-    return fraction
 
 
+# Original
 def mean_normalized_error_power(predictions, ground_truth):
-    '''Compute mean normalized error in assigned power
+    '''F) Compute mean normalized error in assigned power
         
     .. math::
         error^{(n)} = 
@@ -199,44 +378,22 @@ def mean_normalized_error_power(predictions, ground_truth):
     return pd.Series(mne)
 
 
-def rms_error_power(predictions, ground_truth):
-    '''Compute RMS error in assigned power
-    
-    .. math::
-            error^{(n)} = \\sqrt{ \\frac{1}{T} \\sum_t{ \\left ( y_t - \\hat{y}_t \\right )^2 } }
 
-    Parameters
-    ----------
-    predictions, ground_truth : nilmtk.MeterGroup
+##################################
+# Errors in assignment of sources
 
-    Returns
-    -------
-    error : pd.Series
-        Each index is an meter instance int (or tuple for MeterGroups).
-        Each value is the RMS error in predicted power for that appliance.
-    '''
+def precision(predictions, ground_truth):
+    raise NotImplementedError("Can be very easily done in the exact same manner as f1 score")
+    pass
 
-    error = {}
+def recall(predictions, ground_truth):
+    raise NotImplementedError("Can be very easily done in the exact same manner as f1 score")
+    pass
 
-    both_sets_of_meters = iterate_through_submeters_of_two_metergroups(
-        predictions, ground_truth)
-    for pred_meter, ground_truth_meter in both_sets_of_meters:
-        sum_of_squared_diff = 0.0
-        n_samples = 0
-        for aligned_meters_chunk in align_two_meters(pred_meter, 
-                                                     ground_truth_meter):
-            diff = aligned_meters_chunk.icol(0) - aligned_meters_chunk.icol(1)
-            diff.dropna(inplace=True)
-            sum_of_squared_diff += (diff ** 2).sum()
-            n_samples += len(diff)
-
-        error[pred_meter.instance()] = math.sqrt(sum_of_squared_diff / n_samples)
-
-    return pd.Series(error)
-
-
+# Original
 def f1_score(predictions, ground_truth):
-    '''Compute F1 scores.
+    ''' I 
+    Compute F1 scores.
 
     .. math::
         F_{score}^{(n)} = \\frac
@@ -295,6 +452,114 @@ def f1_score(predictions, ground_truth):
 
     return pd.Series(f1_scores)
 
+
+
+
+
+##################################
+# Errors in both
+
+def total_energy_correctly_assigned(disaggregations, ground_truth, tolerance = 0):
+    """ J) 
+    This is the self made error function for calculating the error of the disaggregation.
+    Parameters:
+    predictions: MeterGroup
+        The result of the disaggregation
+    ground_truth: MeterGroup
+        The original appliances recorded by plugs and included within the 
+        source dataset.
+    """
+
+    # Start from second, becasue first is the disaggregated load
+    errors = {}
+    for disag in disaggregations:
+        predictedActiveSections = disag.good_sections()
+        for gtLoad in ground_truth:
+            gtActiveSections = gtLoad
+        both_sets_of_meters = iterate_through_submeters_of_two_metergroups(predictions, ground_truth)
+    for pred_meter, ground_truth_meter in both_sets_of_meters:
+        sections = pred_meter.good_sections()
+        ground_truth_energy = ground_truth_meter.total_energy(sections=sections)
+        predicted_energy = pred_meter.total_energy(sections=sections)
+        errors[pred_meter.instance()] = np.abs(ground_truth_energy - predicted_energy)
+    return pd.Series(errors)
+
+
+def disaggregation_error(disaggregations, ground_truth):
+    """ K
+    """
+
+
+##################################
+# Scaled errors mostly used for forecasting
+
+def mape(y_true, y_pred):
+    ''' 
+    K) This function calculates the mean average percentage error used for 
+    forecasting. It takes to electric as input, whose powerflow function
+    it uses.
+    '''
+    main_meter = 0
+    # 1. Rausfinden ob partitiell ausführbar, dh chunkwise
+    # 2. Schauen ob implementierung in Pandas
+    # 3. Berechnen
+    # 4. Disaggregation plotfunktion schreiben
+    # 5. Wrapper um die ganzen Plot Funktionen herum schreiben
+    # 6. Die versch. Correlations einbauen
+
+    y_true, y_pred = np.array(y_true), np.array(y_pred)
+    return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+
+
+def nrmse(disaggregations, ground_truth, tolerance = 0):
+    ''' M) Normalized Root-Mean-Square Error (NRMSE)
+    '''
+    pass
+
+
+# Original
+def fraction_energy_assigned_correctly(predictions, ground_truth):
+    ''' ?) Kann ich nicht zuordnen:
+
+
+    Compute fraction of energy assigned correctly
+    
+    .. math::
+        fraction = 
+        \\sum_n min \\left ( 
+        \\frac{\\sum_n y}{\\sum_{n,t} y}, 
+        \\frac{\\sum_n \\hat{y}}{\\sum_{n,t} \\hat{y}} 
+        \\right )
+
+    Ignores distinction between different AC types, instead if there are 
+    multiple AC types for each meter then we just take the max value across
+    the AC types.
+
+    Parameters
+    ----------
+    predictions, ground_truth : nilmtk.MeterGroup
+
+    Returns
+    -------
+    fraction : float in the range [0,1]
+        Fraction of Energy Correctly Assigned.
+    '''
+
+
+    predictions_submeters = MeterGroup(meters=predictions.submeters().meters)
+    ground_truth_submeters = MeterGroup(meters=ground_truth.submeters().meters)
+
+    fraction_per_meter_predictions = predictions_submeters.fraction_per_meter()
+    fraction_per_meter_ground_truth = ground_truth_submeters.fraction_per_meter()
+
+    fraction_per_meter_ground_truth.index = fraction_per_meter_ground_truth.index.map(lambda meter: meter.instance)
+    fraction_per_meter_predictions.index = fraction_per_meter_predictions.index.map(lambda meter: meter.instance)
+
+    fraction = 0
+    for meter_instance in predictions_submeters.instance():
+        fraction += min(fraction_per_meter_ground_truth[meter_instance],
+                        fraction_per_meter_predictions[meter_instance])
+    return fraction
 
 ##### FUNCTIONS BELOW THIS LINE HAVE NOT YET BEEN CONVERTED TO NILMTK v0.2 #####
 

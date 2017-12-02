@@ -28,7 +28,7 @@ class Processing(object):
         else:
             for meter in site_meters.all_elecmeters():
                 self._check_meter(meter)
-                if not meter.metadata['site_meter']:
+                if not ('site_meter' in meter.metadata and meter.metadata['site_meter']):
                     raise RuntimeError("Only site meters can be disaggregated")
 
         if 'resample_seconds' in load_kwargs:
@@ -55,7 +55,7 @@ class Processing(object):
                 ". But it is " + str(device.sample_period) + ".")
 
         required = set([cur[0] + cur[1] for cur in self.Requirements['physical_quantities']])
-        measurements = set([cur['physical_quantity'] + cur['type'] for cur in meter.device['measurements']])
+        measurements = set([cur['physical_quantity'] + cur['type'] if 'type' in cur else "" for cur in meter.device['measurements']])
         missing_quantities = required.difference(measurements)
         if len(missing_quantities) > 0:
             raise RuntimeError(

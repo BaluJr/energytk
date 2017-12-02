@@ -45,7 +45,7 @@ class ExternDataSet(DataSet):
     def get_data_for_elec(self, elec):
         '''
         This function returns the data for the given input elec. (Meter or MeterGroup)
-        In the future I should cluster by the zips. But now I take the very first one
+        In the future I should cluster by the zips. But now I take the very first one.
         '''
         if isinstance(elec, MeterGroup):
             elec = elec.meters[0]
@@ -73,5 +73,5 @@ class ExternDataSet(DataSet):
         meters = group.elec                         # weather + holidays
         for chunk in meters.load(cols = variables, sections = {timeframe}, sample_period = sample_period, ignore_missing_columns = True, chunksize = 100000):
             output = output.append(chunk)
-
+        output = output.ffill().bfill()
         return output

@@ -13,40 +13,214 @@ from numpy import diff, concatenate
 from ..utils import timedelta64_to_secs
 import gc
 from nilmtk.elecmeter import ElecMeter
+from scipy import linalg, spatial
+
+
+#####
+
+def myviterbi_numpy_superfast(np.ndarray segment, appliances):
+    '''
+    Own implementation of the viterbi algorithm, which is used to identify the 
+    known appliances inside the powerflow.
+    '''
+    
+    cdef size_t i  
+    cdef size_t j
+    cdef float cost
+    # For each event the mapping to which statemachine-step it may belong
+    event_to_appliance = [[] for i in range(segment.shape[0])]
+    event_to_step = [[] for i in range(segment.shape[0])]
+    for i, appliance in enumerate(appliances):
+        for step in range(appliance['length']):
+            valids = appliance[step].predict(segment) == 1   # -1 means outlier!!!
+            for j, valid in enumerate(valids):
+                if valid:
+                    event_to_appliance[j].append((i))
+                    event_to_step[j].append((step))
+    for i in range(len(event_to_statechange)):
+        event_to_appliance[j] = np.array(event_to_appliance[j])
+        event_to_step[j] = np.array(event_to_step[j])
+
+    # Create the lookup for Matrices: T1=Distances, T2=Matches, T3=Path
+    idx = pd.IndexSlice
+    multindex = pd.MultiIndex(levels=[[] for _ in range(len(appliances))],
+                            labels=[[] for _ in range(len(appliances))],
+                            names=range(len(appliances)))
+    state_table = pd.DataFrame(index = multindex, columns = ['T1', 'T2', 'T3'])
+    startstate = tuple(np.zeros(len(appliances)))
+    state_table.loc[startstate,:] = [0, 0, ""]
+        
+    # Prepare lookup for certain appliance
+    lookups = []
+    for appliance in range(len(appliances)):
+        lookups.append([slice(None) for _ in range(appliance)])
+
+
+    # Find the best path
+    t0 = time.time()
+    for i in range(len(segment)):
+        # Do the calculation for this step
+        new_state_table = state_table.copy()
+        transient = segment[i,:]
+        appliances, steps in event_to_statechange[i]:
+
+        # Create retrieval for all fitting available states in statestable
+        lookup = [slice(None) for _ in range(appliance)]
+        cur_lookups = lookups[appliances]
+        lookup.append([step])
+        rows = state_table.loc[tuple(lookup),:]
+        if len(rows) == 0:
+            continue
+
+        # Calculate the steps
+        cost = spatial.distance.cdist([transient], np.expand_dims(appliances[appliance][step].location_, 0), 'mahalanobis', VI=linalg.inv(appliances[appliance][step].covariance_)).squeeze()
+        newstate = np.array([list(e) for e in rows.index.values])
+        newstate[:,appliance] = (step+1) % (appliances[appliance]['length'])
+        tmp  = list(map(tuple, newstate))
+        newstate = np.zeros(len(newstate), dtype='object')
+        newstate[:] = tmp 
+
+        # Insert when not availbale yet
+        new_introduced = pd.MultiIndex.from_tuples(newstate).difference(new_state_table.index)
+        new_state_table = new_state_table.append(pd.DataFrame(data = {'T1':1e100, 'T2':0, 'T3':''}, index = new_introduced))
+
+        # Update to best
+        isnewmatch = (step == appliances[appliance]['length']-1)
+        to_update = ((rows['T2'].values + isnewmatch > new_state_table.loc[newstate,'T2'].values) | ((rows['T2'].values == new_state_table.loc[newstate,'T2'].values) & ((rows['T1'].values + cost)< new_state_table.loc[newstate,'T1'].values))) # more matches or less cost
+        to_update_in_new = newstate[to_update]
+        new_state_table.loc[to_update_in_new,'T1'] = rows.loc[to_update,'T1'].values + cost
+        new_state_table.loc[to_update_in_new,'T2'] = rows.loc[to_update,'T2'].values + isnewmatch
+        new_state_table.loc[to_update_in_new,'T3'] = rows.loc[to_update,'T3'].values + ";" + str(i) + "," + str(appliance)
+        
+        state_table = new_state_table
+
+    # The best path which ends in zero state is result
+    T1, T2, T3 = state_table.loc[startstate]
+    labels = [-1] * len(segment)
+    for cur in T3.split(";")[1:]:
+        location, appliance = eval(cur)
+        labels[location] = appliance
+    return labels
 
 
 
-# This is my first test for accelerating using c
-def primes(int kmax):
-    cdef int n, k, i
-    cdef int p[1000]
-    result = []
-    if kmax > 1000:
-        kmax = 1000
-    k = 0
-    n = 2
-    while k < kmax:
-        i = 0
-        while i < k and n % p[i] != 0:
-            i = i + 1
-        if i == k:
-            p[k] = n
-            k = k + 1
-            result.append(n)
-        n = n + 1
-    return result
+def myviterbi_numpy_fast(np.ndarray segment, appliances):
+    '''
+    Own implementation of the viterbi algorithm, which is used to identify the 
+    known appliances inside the powerflow.
+    '''
+    
+    cdef size_t i  
+    cdef size_t j
+    cdef float cost
+    # For each event the mapping to which statemachine-step it may belong
+    event_to_statechange = [[] for i in range(segment.shape[0])]
+    for i, appliance in enumerate(appliances):
+        for step in range(appliance['length']):
+            valids = appliance[step].predict(segment) == 1   # -1 means outlier!!!
+            for j, valid in enumerate(valids):
+                if valid:
+                    event_to_statechange[j].append((i, step))
+
+    # Create the lookup for Matrices: T1=Distances, T2=Matches, T3=Path
+    idx = pd.IndexSlice
+    multindex = pd.MultiIndex(levels=[[] for _ in range(len(appliances))],
+                            labels=[[] for _ in range(len(appliances))],
+                            names=range(len(appliances)))
+    state_table = pd.DataFrame(index = multindex, columns = ['T1', 'T2', 'T3'])
+    startstate = tuple(np.zeros(len(appliances)))
+    state_table.loc[startstate,:] = [0, 0, ""]
+        
+    # Find the best path
+    t0 = time.time()
+    for i in range(len(segment)):
+        #print(str(i) + ': ' + str(time.time()-t0))
+        transient = segment[i,:]
+        
+        # Do the calculation for this step
+        new_state_table = state_table.copy()
+        for appliance, step in event_to_statechange[i]:
+            # Create retrieval for all fitting available states in statestable
+            lookup = [slice(None) for _ in range(appliance)]
+            lookup.append([step])
+            rows = state_table.loc[tuple(lookup),:]
+            if len(rows) == 0:
+                continue
+
+            # Calculate the steps
+            cost = spatial.distance.cdist([transient], np.expand_dims(appliances[appliance][step].location_, 0), 'mahalanobis', VI=linalg.inv(appliances[appliance][step].covariance_)).squeeze()
+            newstate = np.array([list(e) for e in rows.index.values])
+            newstate[:,appliance] = (step+1) % (appliances[appliance]['length'])
+            tmp  = list(map(tuple, newstate))
+            newstate = np.zeros(len(newstate), dtype='object')
+            newstate[:] = tmp 
+
+            # Insert when not availbale yet
+            new_introduced = pd.MultiIndex.from_tuples(newstate).difference(new_state_table.index)
+            new_state_table = new_state_table.append(pd.DataFrame(data = {'T1':1e100, 'T2':0, 'T3':''}, index = new_introduced))
+
+            # Update when better
+            isnewmatch = (step == appliances[appliance]['length']-1)
+            to_update = ((rows['T2'].values + isnewmatch > new_state_table.loc[newstate,'T2'].values) | ((rows['T2'].values == new_state_table.loc[newstate,'T2'].values) & ((rows['T1'].values + cost)< new_state_table.loc[newstate,'T1'].values))) # more matches or less cost
+            to_update_in_new = newstate[to_update]
+            new_state_table.loc[to_update_in_new,'T1'] = rows.loc[to_update,'T1'].values + cost
+            new_state_table.loc[to_update_in_new,'T2'] = rows.loc[to_update,'T2'].values + isnewmatch
+            new_state_table.loc[to_update_in_new,'T3'] = rows.loc[to_update,'T3'].values + ";" + str(i) + "," + str(appliance)
+        state_table = new_state_table
+
+    # The best path which ends in zero state is result
+    T1, T2, T3 = state_table.loc[startstate]
+    labels = [-1] * len(segment)
+    for cur in T3.split(";")[1:]:
+        location, appliance = eval(cur)
+        labels[location] = appliance
+    return labels
 
 
+
+
+####
+def myresample_fast(df):
+    if len(df) == 1:
+        return df[0]
+    weights = np.append(np.diff(df.index),np.timedelta64(5,'m') - (df.index[-1] - df.index[0]))
+    weights = weights.astype('timedelta64[ms]').astype(int)
+    return np.average(df, weights=weights)
+
+def myresample_fast_alternative(d):
+    cdef np.ndarray val
+    cdef np.ndarray index 
+    cdef np.ndarray weights
+    if len(d) == 1:
+        return d[0]
+    val = d.values
+    idx = d.index.values
+    weights = np.append(np.diff(idx),np.timedelta64(5,'m') - (idx[-1] - idx[0]))
+    weights = weights.astype('timedelta64[ms]').astype(int)
+    return np.average(val, weights=weights)
+
+####
 cdef class MyType:
     cdef vector[int] v
 
 
 cdef class PowerStack:
-
+    '''
+    This is the stack holding information about powerflow so far.
+    '''
     cdef vector[vector[int]] v
     cdef vector[float] avg
 
+    def size(self):
+        '''
+        Returns whether still elements on the stack
+        '''
+        return self.v.size()
+
     def push(self, x, val):
+        '''
+        x is the position where val appeared.
+        '''
         cdef vector[int] xx = vector[int]()
         xx.push_back(x)
         self.v.push_back(xx)
@@ -96,8 +270,9 @@ def find_sections(inputs):
     cdef size_t i  
     cdef np.ndarray to_set
     cur_power = 0
-    stack.push(-1, 0)
+    stack.push(0, -100)
     for i in range(len(indices)):
+        #print(i)
 
         # Reduce stack if dropped below certain level
         while states[i] < (stack.cur_avg() - state_threshold):
@@ -122,10 +297,27 @@ def find_sections(inputs):
             stack.push(i, states[i])
         cur_power = states[i]
 
+    # Remove all elements still on the stack
+    while stack.size() > 1:
+        # The base state
+        cur = stack.pop()
+        #print(cur)
+        # When a stable state identify new subclasses
+        if len(cur) >= 3: 
+            for j in range(len(cur)-1):
+                #print('With append to ids' + str(i) +":" + str(j) + "_" + str(segments[cur[j]:cur[j+1]])) 
+                segments[cur[j]:cur[j+1]] = str(j) + "_" + segments[cur[j]:cur[j+1]] 
+        # Always add a layer information to all events inside the current hill (from last element on stack on)
+        if stack.size() == 0:
+            last = 0
+        else: 
+            last = stack.last()
+        to_set = (segments[stack.last():i] != '')
+        segments[stack.last(): i][to_set] = "|" + segments[stack.last(): i][to_set]
     return segments
 
 
-#region Event Detection
+#region Event Detection 68614
 def find_steady_states_fast(inputs): #np.ndarray indices, np.ndarray values, int min_n_samples=2, int state_threshold=15, int noise_level=70):
     """Finds steady states given a DataFrame of power with only
     a single column.
@@ -182,7 +374,6 @@ def find_steady_states_fast(inputs): #np.ndarray indices, np.ndarray values, int
     #i = 0
     cdef size_t i  
     for i in range(len(indices)):#row in dataframe.itertuples():
-        print(i)
         #print(row)
         #i += 1
         #if DEBUG and i == 100000:
