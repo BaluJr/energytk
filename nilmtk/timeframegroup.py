@@ -77,31 +77,80 @@ class TimeFrameGroup():
         (self._df['section_end'] - self._df['section_start']).apply(lambda e: e.total_seconds()).hist(bins=bins)
 
 
+
+    def get_timeframe(self):
+        '''
+        Returns the outer timeframe of this TimeFrameGroup
+        '''
+        return TimeFrame(start = self._df.iloc[0, 'section_start'], end = self._df.iloc[0, 'section_end'])
+
+
+    def union(self, other):
+        '''
+        self.good_sections():   |######----#####-----######-#|
+        other.good_sections():  |---##---####----##-----###-#|
+        diff():                 |######--#######-##--######-#|
+        '''
+        assert isinstance(other, (TimeFrameGroup, list))
+        return TimeFrameGroup.union_many([self, other])
+
+    def union_many(groups):
+        ''' 
+        Function to do a do a fast intersection between many timeframes
+        '''
+        all_events = pd.Series()
+        for group in groups:
+            all_events = all_events.append(pd.Series(1, index=pd.DatetimeIndex(group._df['section_start'])))
+            all_events = all_events.append(pd.Series(-1, index=pd.DatetimeIndex(group._df['section_end'])))
+        all_events.sort_index(inplace=True)
+        any_active = (all_events.cumsum()>0).astype(int)
+
+        switches = (any_active - any_active.shift(1).fillna(0))
+        starts = all_events[switches == 1].index
+        ends = all_events[switches == -1].index
+        result = pd.DataFrame({'section_start': starts, 'section_end':ends})
+        return TimeFrameGroup(result)
+
+
+    def diff(self, other):
+        '''
+        Difference between this and the other TimeFrameGroup.
+
+        self.good_sections():   |######----#####-----######-#|
+        other.good_sections():  |---##---####----##-----###-#|
+        diff():                 |###--#------###-----###-----|
+        '''
+        assert isinstance(other, (TimeFrameGroup, list))
+        
+        all_events = pd.Series()
+        all_events = all_events.append(pd.Series(1, index=pd.DatetimeIndex(self._df['section_start'])))
+        all_events = all_events.append(pd.Series(-1, index=pd.DatetimeIndex(self._df['section_end'])))
+        all_events = all_events.append(pd.Series(-1, index=pd.DatetimeIndex(other._df['section_start'])))
+        all_events = all_events.append(pd.Series(+1, index=pd.DatetimeIndex(other._df['section_end'])))
+        all_events.sort_index(inplace=True)
+
+        all_active = (all_events.cumsum()>0)
+        starts = all_events.index[all_active]
+        ends = all_active.shift(1)
+        if len(ends > 0):
+            ends[0] = False
+        ends = all_events[ends].index
+        result = pd.DataFrame({'section_start': starts, 'section_end':ends})
+        return TimeFrameGroup(result)
+
+
+
     def intersection(self, other):
         """Returns a new TimeFrameGroup of self masked by other.
 
         Illustrated example:
 
-         self.good_sections():  |######----#####-----######|
-        other.good_sections():  |---##---####----##-----###|
-               intersection():  |---##-----##-----------###|
+        self.good_sections():   |######----#####-----######-#|
+        other.good_sections():  |---##---####----##-----###-#|
+               intersection():  |---##-----##-----------###-#|
         """
         assert isinstance(other, (TimeFrameGroup, list))
         return TimeFrameGroup.intersect_many([self, other])
-
-        #my = self._df
-        #its = other._df
-        
-        #cuts = my['start'] < other['end'] and my['end'] < other['start']
-        #result = pd.DataFrame()
-        #result['section_start'] = min(cuts['sections_max1'], cuts['sections_max2'])
-        #result['section_end'] = min(cuts['sections_start1'], cuts['sections_start2'])
-        #return result
-
-
-    # JETZT MUSS ICH DAS NUR NOCH AUSPROBIEREN!
-    # UND DANN BEI DEN RESULTS AUCH EINFACH EBEN IMPORT UND EXPORT AUF DIESES DATAFRAME SETZEN
-    # UND DANN VIELLEICHT NOCH EBEN DIE FUNKTIONALITAET ANBIETEN TIMEFRAMES RAUSZUREICHEN AUS DER TFG
 
     
     def intersect_many(groups):
@@ -122,23 +171,80 @@ class TimeFrameGroup():
         result = pd.DataFrame({'section_start': starts, 'section_end':ends})
         return TimeFrameGroup(result)
 
+
+
+    def matching(self, other):  #, valid_timeframes = None, in_percent = False):
+        '''
+        Calculates the matching of two timeframegroups.
+        These are the timeframes where both are on or off.
+        If given, excluded timeframes are calculated out. This is usefull when there 
+        are eg. notgood sections.
+        
+        self.good_sections():   |######----#####-----######-#|
+        other.good_sections():  |---##---####----##-----###-#|
+        matching():             |---##-##--##---#--##---#####|
+
+        Paramters:
+        other: The other timeframe to match with
+        valid_timeframes: TimeFrameGroup which defines the area for which to do the calculation
+        in_percent: Whether the amount of matched time shall be returned as fraction of whole valid timespan.
+                    (takes into account the "excluded_timeframes")
+        '''
+        
+        assert isinstance(other, (TimeFrameGroup, list))
+        return TimeFrameGroup.matching_many([self, other])
+
+        #common_on = self.intersection(other)
+        #self_off = self.invert(start=first, end=last)
+        #other_off = other.invert(start=first, end=last)
+        #common_off = self_off.intersection(other_off)
+
+        #if in_percent:
+        #    valid_time = self.full_time() - excluded_timeframes.uptime()
+        #    percent = common.uptime() / valid_time
+        #    return percent
+        #else:
+        #    return common
+
+    
+    def matching_many(groups):
+        ''' 
+        Function to do a do a fast matching between many timeframes
+        '''
+        all_events = pd.Series()
+        for group in groups:
+            all_events = all_events.append(pd.Series(1, index=pd.DatetimeIndex(group._df['section_start'])))
+            all_events = all_events.append(pd.Series(-1, index=pd.DatetimeIndex(group._df['section_end'])))
+        all_events.sort_index(inplace=True)
+        all_events_sum = all_events.cumsum()
+        all_active = ((all_events_sum==len(groups)) | (all_events_sum == 0))
+        # Remove last, which is always created after end of all sections
+        starts = all_events.index[all_active][:-1] 
+        ends = all_active.shift(1)
+        if len(ends > 0):
+            ends[0] = False
+        ends = all_events[ends].index
+        result = pd.DataFrame({'section_start': starts, 'section_end':ends})
+        return TimeFrameGroup(result).simplify()
+
+
+
+
     def uptime(self):
-        """Returns total timedelta of all timeframes joined together."""
+        """
+        Returns total timedelta of all timeframes joined together.
+        """
         return (self._df['section_end'] - self._df['section_start']).sum()
-        #uptime = timedelta(0)
-        #for timeframe in self:
-        #    uptime += timeframe.timedelta
-        #return uptime
+
+
 
     def remove_shorter_than(self, threshold):
-        """Removes TimeFrames shorter than `threshold` seconds."""
+        """
+        Removes TimeFrames shorter than `threshold` seconds.
+        """
         return TimeFrameGroup(self._df[self._df['section_end']-self._df['section_start'] > threshold])
-        #new_tfg = TimeFrameGroup()
-        #for timeframe in self:
-        #    if timeframe.timedelta.total_seconds() >= threshold:
-        #        new_tfg.append(timeframe)
 
-        #return new_tfg
+
 
     def merge_shorter_gaps_than(self, threshold):
         if self._df.empty:
@@ -153,15 +259,35 @@ class TimeFrameGroup():
         relevant_ends = self._df[["section_end"]][gap_larger].reset_index(drop=True)
         return TimeFrameGroup(pd.concat([relevant_starts, relevant_ends], axis=1))
 
+
+    def simplify(self):
+        '''
+        Merges all sections, which are next to each other.
+        Another view: Removes gaps of zero length.
+        '''
+        to_keep = (self._df["section_start"].shift(-1) != self._df["section_end"])
+        #to_keep.iloc[-1] = True # keep last
+        relevant_starts = self._df[["section_start"]][to_keep.shift(1).fillna(True)].reset_index(drop=True)
+        relevant_ends = self._df[["section_end"]][to_keep].reset_index(drop=True)
+        return TimeFrameGroup(pd.concat([relevant_starts, relevant_ends], axis=1))
+
+
+
+
     def remove_before(self, start):
         self._df  = self._df[self._df["section_end"] > start]
         self._df[self._df["section_start"] < start]["section_start"] = start
 
-    def invert(self, start = None, end = None):
+
+    def invert(self, start = None, end = None, outer_timeframe = None):
         ''' 
         Returns a TimeFrameGroup with inverted rectangles.
         That means where there was a gap before is now a 
         TimeFrame and vice versa.
+
+        Paramter:
+        start, end: Timestamps defining the start and end of the region to invert
+        outer_timeframe: 
         '''
         if self._df.empty:
             if not start is None and not end is None:
@@ -189,19 +315,8 @@ class TimeFrameGroup():
             inversion.loc[inversion.index[-1], 'section_end'] = end
 
         return TimeFrameGroup(inversion)
-                #if not(start is None and end is None):
-        #    raise Exception("Not implemented yet")
 
-        #if len(self) < 2:
-        #    return TimeFrameGroup()
 
-        #new_tfg = TimeFrameGroup()
-        #prevEnd = self[0].end
-        #for timeframe in self[1:]:
-        #    if prevEnd != timeframe.start:
-        #        new_tfg.append(TimeFrame(start = prevEnd, end = timeframe.start))
-        #    prevEnd = timeframe.end            
-        #return new_tfg
 
     def __iter__(self):
         if len(self._df) == 0:
@@ -246,26 +361,6 @@ class TimeFrameGroup():
 
     def drop_all_but(self,i):
         return TimeFrameGroup(self._df[i:i+1].reset_index(drop=True))
-
-    #def diff(self, other):
-    #    '''
-    #    self.good_sections():   |######----#####-----######|
-    #    other.good_sections():  |---##---####----##-----###|
-    #    diff():                 |###--#------###-----###---|
-    #    '''
-    #    assert isinstance(other, (TimeFrameGroup, list))
-    #    if len(self) == 0:
-    #        return TimeFrameGroup(self[0].start)
-    #    elif len(other) == 0:
-    #        return deepcopy(self)
-                
-    #    other_cpy = deepcopy(other)
-    #    other_cpy.insert(0,TimeFrame(start=self[0].start - pd.Timedelta(1, unit='s'), end=self[0].start))
-    #    other_cpy.append(TimeFrame(start=self[0].end, end=self[0].end + pd.Timedelta(1, unit='s')))
-    #    other = other_cpy.invert()
-    #    return self.intersection(other)
-    #    return total_result
-
 
 
 #class TimeFrameGroup(list):
