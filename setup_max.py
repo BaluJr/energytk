@@ -1,10 +1,19 @@
+'''
+This is the central cython setup file, which compiles all the cython .pyx files of the project.
+It has to be run whenever a change has been made to the files.
+Targeted files:
+- nilmtk/disaggregate/accelerators.pyx
+- nilmtk/stats/accelerators_stat.pyx
+'''
+
 #  python setup.py build_ext --inplace
+
 from distutils.core import setup
 from Cython.Build import cythonize
 import numpy
 
 setup(
-    ext_modules = cythonize(["nilmtk/disaggregate/accelerators.pyx", "nilmtk/stats/accelerators_stat.pyx"]), #("nilmtk/disaggregate/accelerators.pyx"),
+    ext_modules = cythonize(["nilmtk/disaggregate/accelerators.pyx", "nilmtk/stats/accelerators_stat.pyx"], language="c++"), 
     include_dirs=[numpy.get_include()]
 )
 
