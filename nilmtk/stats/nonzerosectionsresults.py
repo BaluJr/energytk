@@ -9,7 +9,8 @@ from nilmtk.timeframegroup import TimeFrameGroup
 import numpy as np
 
 class NonZeroSectionsResults(Results):
-    """
+    """ The result of the Non zero section statistic.
+
     Attributes
     ----------
     _data : pd.DataFrame
@@ -33,7 +34,6 @@ class NonZeroSectionsResults(Results):
         timeframe : nilmtk.TimeFrame
         new_results : {'sections': list of TimeFrame objects}
         """
-        #new_results['sections'] = [TimeFrameGroup(new_results['sections'][0])]
         super(NonZeroSectionsResults, self).append(timeframe, new_results)
 
     def finalize(self):
@@ -58,20 +58,6 @@ class NonZeroSectionsResults(Results):
 
         starts = pd.concat(starts)
         ends = pd.concat(ends)
-        
-        # Check whether something has to be added in between or before
-        # if len(starts) == 0 == len(ends):
-        #     self._data = TimeFrameGroup()
-        #     return
-        # elif len(starts) == 0:
-        #     starts = np.array([self._data.head(1)['start'][0]])
-        # elif len(ends) == 0:
-        #     ends = np.array([self._data.tail(1)['end'][0]])
-        # else:
-        #     if starts[0] > ends[0]:
-        #         starts = np.append(np.datetime64(self._data.index[0]), starts)
-        #     if ends[-1] < starts[-1]:
-        #         ends = np.append(ends, np.datetime64(self._data.tail(1)['end'][0]))
         rate = pd.Timedelta(seconds=self.max_sample_rate)
         self._data = TimeFrameGroup(starts_and_ends={'starts': starts, 'ends': ends}).merge_shorter_gaps_than(rate)
 
@@ -86,28 +72,26 @@ class NonZeroSectionsResults(Results):
 
 
     def to_dict(self):
-        nonzero_sections = self._data #.combined()
+        nonzero_sections = self._data
         nonzero_sections_list_of_dicts = [timeframe.to_dict() 
                                        for timeframe in nonzero_sections]
         return {'statistics': {'nonzero_sections': nonzero_sections_list_of_dicts}}
 
 
     def plot(self, **plot_kwargs):
-        timeframes = self #.combined()
+        timeframes = self
         return timeframes.plot(**plot_kwargs)
 
         
     def import_from_cache(self, cached_stat, sections):   
-        '''
-        As explained in 'export_to_cache' the sections have to be stored 
-        rowwise. This function parses the lines and rearranges them as a 
-        proper NonZeroSectionsResult again.
+        ''' Stores the statistic into the cache of the nilmtk.DataStore
 
         Note
         ----
-        I do not know whether this is still an issue:
+        I do not know whether this is still an issue: 
         HIER IST DAS PROBLEM BEIM STATISTIKEN LESEN! 
-        DIE WERDEN CHUNK Weise GESPEICHERT, aber hier wird auf das Vorhandensein der gesamten Section als ganzes vertraut.
+        DIE WERDEN CHUNK Weise GESPEICHERT, aber hier wird auf 
+        das Vorhandensein der gesamten Section als ganzes vertraut.
         '''
         self._data = TimeFrameGroup(cached_stat)
 
@@ -118,12 +102,7 @@ class NonZeroSectionsResults(Results):
 
         Returns
         -------
-        DataFrame with three columns: 'end', 'section_end', 'section_start'.
-            Instead of storing a list of TimeFrames on each row,
-            we store one TimeFrame per row.  This is because pd.HDFStore cannot
-            save a DataFrame where one column is a list if using 'table' format'.
-            We also need to strip the timezone information from the data columns.
-            When we import from cache, we assume the timezone for the data 
-            columns is the same as the tz for the index.
+        df: pd.DataFrame
+            With three columns: 'end', 'section_end', 'section_start.      
         """
         return self._data._df

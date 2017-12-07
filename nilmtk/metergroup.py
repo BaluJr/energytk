@@ -144,6 +144,16 @@ class MeterGroup(Electric):
         self.meters.append(meter)
         self.disabled_meters.remove(meter)
 
+        
+    def add(self, meter):
+        """
+        Adds a new meter to the metergroup.
+        """
+        if not isinstance(meter, ElecMeter):
+            raise TypeError()
+        return self.meters.append(meter)
+    
+
     def union(self, other):
         """
         Returns

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from six import iteritems
 from .preprocessing import Clip
-from .stats import TotalEnergy, GoodSections, DropoutRate, NonZeroSections
+from .stats import TotalEnergy, GoodSections, DropoutRate, NonZeroSections, OverBasepowerSections
 from .hashable import Hashable
 from .measurement import (select_best_ac_type, PHYSICAL_QUANTITIES,
                           check_ac_type, check_physical_quantity)
@@ -710,7 +710,7 @@ class ElecMeter(Hashable, Electric):
         return self._get_stat_from_cache_or_compute(
             nodes, results_obj, load_kwargs)
 
-    def nonzero_sections(self, ignore_gaps=False, **load_kwargs):
+    def nonzero_sections(self, **load_kwargs):
         """
         Needs the good sections to be calculated before
 
@@ -718,21 +718,13 @@ class ElecMeter(Hashable, Electric):
         ----------
         full_results : bool, default=False
         **loader_kwargs : key word arguments for DataStore.load()
-        ignore_gaps : bool, default=True
-            If True then will only look for nonzero sections in good sections.
 
         Returns
         -------
         if `full_results` is True then return nilmtk.stats.GoodSectionsResults
         object otherwise return list of TimeFrame objects.
         """
-        
-        # Don't need these since I have the new calculation approach
-        #if ignore_gaps:
-        #    load_kwargs['sections'] = self.good_sections(**load_kwargs)._data
-        #load_kwargs.setdefault('n_look_ahead_rows', 10) 
-
-        
+                
         nodes = [NonZeroSections]
         results_obj = NonZeroSections.results_class(self.device['max_sample_period'])
         try:
@@ -743,6 +735,36 @@ class ElecMeter(Hashable, Electric):
             tmp = NonZeroSections.results_class(self.device['max_sample_period'])
             tmp.finalize()
             return tmp._data
+
+    
+    def overbasepower_sections(self, **load_kwargs):
+        """
+        Needs the good sections to be calculated before
+
+        Parameters
+        ----------
+        full_results : bool, default=False
+        **loader_kwargs : key word arguments for DataStore.load()
+        ignore_gaps : bool, default=True
+            If True then will only look for overbasepower sections in good sections.
+
+        Returns
+        -------
+        if `full_results` is True then return nilmtk.stats.GoodSectionsResults
+        object otherwise return list of TimeFrame objects.
+        """
+        
+        nodes = [OverBasepowerSections]
+        results_obj = OverBasepowerSections.results_class(self.device['max_sample_period'])
+        try:
+            return self._get_stat_from_cache_or_compute(
+                nodes, results_obj, load_kwargs)
+        except TypeError as e:
+            # Return empty Is a workarround because just don't knwo how to handle
+            tmp = OverBasepowerSections.results_class(self.device['max_sample_period'])
+            tmp.finalize()
+            return tmp._data
+
 
     def _get_stat_from_cache_or_compute(self, nodes, results_obj, loader_kwargs):
         """General function for computing statistics and/or loading them from
@@ -849,8 +871,8 @@ class ElecMeter(Hashable, Electric):
             results_obj = self._compute_stat(nodes, loader_kwargs).results
             
             # For Nonzero section exclude where there are not good sections
-            if  results_obj.name == 'nonzero_sections':
-                good_sections = self.good_sections(**loader_kwargs)._data
+            if  results_obj.name == 'nonzero_sections' or results_obj.name == 'overbasepower_sections':
+                good_sections = self.good_sections(**loader_kwargs) #_data
                 results_obj._data = results_obj._data.intersection(good_sections)
 
             # Save to disk newly computed stats
@@ -985,7 +1007,7 @@ class ElecMeter(Hashable, Electric):
         get_cached_stat
         """
         if caches_to_delete is None:
-            caches_to_delete = ['nonzero_sections', 'good_sections', 'total_energy']
+            caches_to_delete = ['overbasepower_sections', 'nonzero_sections', 'good_sections', 'total_energy']
         elif not isinstance(caches_to_delete, list):
             caches_to_delete = list(caches_to_delete)
         if self.store is not None:

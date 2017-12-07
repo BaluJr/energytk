@@ -5,6 +5,7 @@ warnings.simplefilter('default')
 from nilmtk import *
 from nilmtk.version import version as __version__
 from nilmtk.timeframe import TimeFrame
+from nilmtk.timeframegroup import TimeFrameGroup
 from nilmtk.elecmeter import ElecMeter
 from nilmtk.datastore import DataStore, HDFDataStore, CSVDataStore, Key
 from nilmtk.metergroup import MeterGroup

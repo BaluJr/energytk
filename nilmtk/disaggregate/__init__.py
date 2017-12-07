@@ -12,3 +12,6 @@ from .autoencoder import Autoencoder
 from .accelerators import find_steady_states_fast
 from .accelerators import find_steady_states_transients_fast
 from .accelerators import pair_fast
+from .accelerators import find_sections
+from .accelerators import myresample_fast
+from .accelerators import myviterbi_numpy_fast
