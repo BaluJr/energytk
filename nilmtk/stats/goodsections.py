@@ -28,7 +28,7 @@ class GoodSections(Node):
     def process(self):
         metadata = self.upstream.get_metadata()
         self.check_requirements()
-        self.results = GoodSectionsResults(2.3) #metadata['device']['max_sample_period'])
+        self.results = GoodSectionsResults(metadata['device']['max_sample_period'])
         for chunk in self.upstream.process():
             self._process_chunk(chunk, metadata)
             yield chunk
@@ -58,14 +58,19 @@ class GoodSections(Node):
             then the first TimeFrame will have `start=None`.
         """
         # Retrieve relevant metadata
-        max_sample_period = 2.3 # metadata['device']['max_sample_period']
+        max_sample_period = metadata['device']['max_sample_period']
+        sample_period = metadata['device']['sample_period']
         look_ahead = getattr(df, 'look_ahead', None)
         timeframe = df.timeframe
 
+        # Special Case: Appliances with Sample Period 0 are always good
+        if (sample_period == 0):
+            good_sections = [TimeFrame(start=df.index[0], end = df.index[-1])] # NOT SURE WHETHER I NEED NONE!?
         # Process dataframe
-        good_sections = get_good_sections_fast(
-            df, max_sample_period, look_ahead,
-            self.previous_chunk_ended_with_open_ended_good_section)
+        else:
+            good_sections = get_good_sections_fast(
+                df, max_sample_period, look_ahead,
+                self.previous_chunk_ended_with_open_ended_good_section)
 
         # Set self.previous_chunk_ended_with_open_ended_good_section
         if good_sections:

@@ -34,8 +34,9 @@ class TotalEnergyResults(Results):
     def to_dict(self):
         return {'total_energy': self.to_dict()} #.combined().to_dict()}
 
-    def simple(self):
-        return self.combined()
+    def finalize(self):
+        self._data = self._data.sum() #results_obj._data.sum()['active
+        #return self.combined()
 
     def export_to_cache(self):
-        return self._data.fillna(0).convert_objects()
+        return self._data#.fillna(0).convert_objects()

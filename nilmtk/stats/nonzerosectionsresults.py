@@ -93,34 +93,24 @@ class NonZeroSectionsResults(Results):
 
 
     def plot(self, **plot_kwargs):
-        timeframes = self#.combined()
+        timeframes = self #.combined()
         return timeframes.plot(**plot_kwargs)
 
         
     def import_from_cache(self, cached_stat, sections):   
-        # HIER IST DAS PROBLEM BEIM STATISTIKEN LESEN! DIE WERDEN CHUNK Weise GESPEICHERT, aber hier wird auf das Vorhandensein der gesamten Section als ganzes vertraut
         '''
         As explained in 'export_to_cache' the sections have to be stored 
         rowwise. This function parses the lines and rearranges them as a 
         proper NonZeroSectionsResult again.
+
+        Note
+        ----
+        I do not know whether this is still an issue:
+        HIER IST DAS PROBLEM BEIM STATISTIKEN LESEN! 
+        DIE WERDEN CHUNK Weise GESPEICHERT, aber hier wird auf das Vorhandensein der gesamten Section als ganzes vertraut.
         '''
         self._data = TimeFrameGroup(cached_stat)
 
-        # we (deliberately) use duplicate indices to cache NonZeroSectionResults
-        #grouped_by_index = cached_stat.groupby(level=0)
-        #tz = get_tz(cached_stat)
-        #for tf_start, df_grouped_by_index in grouped_by_index:
-        #    grouped_by_end = df_grouped_by_index.groupby('end')
-        #    for tf_end, sections_df in grouped_by_end:
-        #        end = tz_localize_naive(tf_end, tz)
-        #        timeframe = TimeFrame(tf_start, end)
-        #        if any([section.contains(timeframe) for section in sections]): # Had to adapt this, because otherwise no cache use when loaded in chunks
-        #            timeframes = []
-        #            for _, row in sections_df.iterrows():
-        #                section_start = tz_localize_naive(row['section_start'], tz)
-        #                section_end = tz_localize_naive(row['section_end'], tz)
-        #                timeframes.append(TimeFrame(section_start, section_end))
-        #            self.append(timeframe, {'sections': [timeframes]})
 
     def export_to_cache(self):
         """
@@ -137,14 +127,3 @@ class NonZeroSectionsResults(Results):
             columns is the same as the tz for the index.
         """
         return self._data._df
-        #index_for_cache = []
-        #data_for_cache = [] # list of dicts with keys 'end', 'section_end', 'section_start'
-        #for index, row in self._data.iterrows():
-        #    for section in row['sections']:
-        #        index_for_cache.append(index)
-        #        data_for_cache.append(
-        #            {'end': row['end'], 
-        #             'section_start': convert_none_to_nat(section.start),
-        #             'section_end': convert_none_to_nat(section.end)})
-        #df = pd.DataFrame(data_for_cache, index=index_for_cache)
-        #return df.convert_objects()

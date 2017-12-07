@@ -11,15 +11,13 @@ from ..timeframe import list_of_timeframes_from_list_of_dicts, timeframe_from_di
 import pandas as pd
 
 class NonZeroSections(Node):
-    """Locate sections of data where the samples are bigger 
-    larger 0. This is mostly used for disaggregated powerflows
+    """ Locate sections of data where the load is larger than 0.
+    
+    This is mostly used for disaggregated powerflows
     where there is really a power of 0 when the appliance 
     is not nonzero. Do not confuse it with the 'get_activations' 
     function of elecmeter. That function is not cached and returns 
     the real dataframe, while this stat only defines the borders.
-
-    Only regards sections longer than 1 step. Because otherwise to many      !!!!!!!!! DAS MUSS ICH IMPLEMENTIEREN!!!!!!!!!!!
-    problems.
 
     Attributes
     ----------
@@ -69,7 +67,7 @@ class NonZeroSections(Node):
         timeframe = df.timeframe
 
         # Process dataframe
-        nonzero_sections_starts, nonzero_sections_ends = get_nonzero_sections(df)#_fast(df)
+        nonzero_sections_starts, nonzero_sections_ends = get_nonzero_sections(df)
 
         # Update self.results
         #if nonzero_sections:
@@ -108,62 +106,3 @@ def get_nonzero_sections(df):
     nonzero_sect_starts = pd.Series(df[nonzero_sect_starts].index)
     nonzero_sect_ends = pd.Series(df[nonzero_sect_ends].index)
     return nonzero_sect_starts, nonzero_sect_ends
-
-    #for i in range(2,minimal_zerotime):
-    #    tmp = df.astype(np.int).diff(i)
-    #    nonzero_sect_starts *= tmp == 1
-    #    nonzero_sect_ends *= tmp == 0
-    #tmp = df.astype(np.int).diff(minimal_zerotime)
-    #nonzero_sect_starts *=  tmp == 1
-    #nonzero_sect_ends *= tmp == -1
-    #del tmp
-    #nonzero_sect_starts = list(df[nonzero_sect_starts].dropna().index)
-    #nonzero_sect_ends   = list(df[nonzero_sect_ends.shift(-minimal_zerotime).fillna(False)].dropna().index)
-
-    ## If this chunk starts or ends with an open-ended
-    ## nonzero section then the relevant TimeFrame needs to have
-    ## a None as the start or end.
-    #for i in range(minimal_zerotime):
-    #    if df.iloc[i, 0] == True:
-    #        nonzero_sect_starts = [df.index[i]] + nonzero_sect_starts
-    #        break
-
-    #if df.iloc[-1,0] == True:
-    #    nonzero_sect_ends += [None]
-    #else:
-    #    # Only start new zerosection when long enough, need look_ahead
-    #    for i in range(1,minimal_zerotime+1):
-    #        if df.iloc[-i, 0] != False:
-    #            break
-
-    #    if i < (minimal_zerotime):
-    #        if look_ahead.head(minimal_zerotime-i).sum()[0] == 0:
-    #            nonzero_sect_ends += [df.index[-i]] #, 0]]
-    #        else:
-    #            nonzero_sect_ends += [None]
-
-
-    ## Merge together ends and starts
-    #assert len(nonzero_sect_starts) == len(nonzero_sect_ends)
-
-    #if len(nonzero_sect_ends) > len(nonzero_sect_starts):
-    #    sections = [TimeFrame(start, end)
-    #else:
-    #    sections = []
-    #if len(nonzero_sect_starts) == 0 == len(nonzero_sect_ends):
-    #    return [TimeFrameGroup()]
-    #else:
-    #    if nonzero_sect_starts[0] > nonzero_sect_ends[0]:
-    #        nonzero_sect_starts.append(None)
-    #    if nonzero_sect_ends[-1] < nonzero_sect_starts[-1]:
-    #        nonzero_sect_ends.append(None)
-    #sections = [TimeFrame(start, end)
-    #            for start, end in zip(nonzero_sect_starts, nonzero_sect_ends)
-    #            if not (start == end and start is not None)]
-
-    # Memory management
-    #del nonzero_sect_starts
-    #del nonzero_sect_ends
-    #gc.collect()
-
-    #return sections
