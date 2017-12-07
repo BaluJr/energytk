@@ -12,8 +12,7 @@ class HoltWinterModel(object):
     }
 
 class HoltWinterForecaster(Forecaster):
-    """This is a forecaster based on the popular 
-    Holt-Winter exponential smoothing method.
+    """ Forecaster based on popular Holt-Winter exponential smoothing.
     
     Core originally coded in Python 2 by: Andre Queiroz
     Description: This module contains three exponential smoothing algorithms. They are Holt's linear trend method and Holt-Winters seasonal methods (additive and multiplicative).

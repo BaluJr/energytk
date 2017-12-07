@@ -7,19 +7,17 @@ import pickle as pckl
 
 class ReferenceForecasterModel(object):
     params = {
-        # The number of lag observations included in the model, also called the lag order.
-        'p': 3,
-        #The number of times that the raw observations are differenced, also called the degree of differencing.
-        'd': 2,
-        #The size of the moving average window, also called the order of moving average
-        'q': 1 
+        # The strategy to use: ["last_day_same_time", "last_week_same_time", "keep_constant"]
+        'strategy': "last_day_same_time"
     }
 
     model = None
 
 class ReferenceForecaster(Forecaster):
-    """ This is a stupid forecaster which follows fixed 
-    strategies. Last day same time.
+    """ Very simple forecaster following fixed strategies. 
+    This forecaster does the forecasting by following simple rules, as 
+    for example the value of the last day of the same type.
+    Can be therfore also seen as an expert system.
     """
 
     model_class = ReferenceForecasterModel

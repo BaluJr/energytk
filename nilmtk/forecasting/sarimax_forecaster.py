@@ -1,6 +1,5 @@
 import pandas as pd
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-from statsmodels.tsa.arima_model import ARIMA
 from matplotlib import pyplot
 from . import Forecaster
 import matplotlib.pyplot as plt
@@ -12,6 +11,16 @@ import pickle as pckl
 #https://www.analyticsvidhya.com/blog/2016/02/time-series-forecasting-codes-python/
 
 class SarimaxForecasterModel(object):
+    '''
+    This is the model used for forecasting. It is an enumerable with one set of the below attributes
+    for each entry. Each entry represents one forecasting horizon
+
+    Attributes
+    ----------
+    model_sarimax: sstatsmodels.tsa.statespace.sarimax.SARIMAX
+        The SARIMAX model used for forecasting
+    '''
+
     params = {
         # The number of lag observations included in the model, also called the lag order.
         'p': 2,
@@ -39,6 +48,7 @@ class SarimaxForecasterModel(object):
 
     model = None
 
+
 class SarimaxForecaster(Forecaster):
     """
     This is a forecaster based on Seasonal AutoRegressive Integrated Moving Average with eXogenous regressors:
@@ -51,11 +61,30 @@ class SarimaxForecaster(Forecaster):
         """
         Constructor of this class which takes an optional model as input.
         If no model is given, it createsa default one.
+        
+        Paramters
+        ---------
+        model: Model of type model_class
+            The model which shall be used.
         """
         super(SarimaxForecaster, self).__init__(model)
 
 
     def train(self, meters, extDataSet, verbose = False):
+        '''
+        Does the training of the ARIMA model. Each load chunk is translated into 
+        multiple minibatches used for training the network.
+        
+        Parameters
+        ----------
+        meters: nilmtk.DataSet
+            The meters from which the demand is loaded
+        extDataSet: nilmtk.DataSet
+            The External Dataset containing the fitting data.
+        verbose: bool
+            Whether additional output shall be printed during training.
+        '''
+
         params = self.model.params
         
         # 1. Load the data
@@ -114,6 +143,23 @@ class SarimaxForecaster(Forecaster):
         
 
     def forecast(self):
+        '''
+        This method uses the learned model to predict the future
+        For each forecaster the forecast horizon is derived from its 
+        smallest shift value.
+        All meters that contain a powerflow are considered part of the 
+        group to forecast.
+
+        Parameters
+        ----------
+        meters: nilmtk.DataSet
+            The meters from which the demand is loaded.
+        timestamp: [pd.TimeStamp,...] or pd.DatetimeIndex
+            The point in time from which the prognoses is performed.
+        verbose: bool
+            Whether additional output shall be printed during training.
+        '''
+
         series = read_csv('shampoo-sales.csv', header=0, parse_dates=[0], index_col=0, squeeze=True, date_parser=parser)
         X = series.values
         size = int(len(X) * 0.66)

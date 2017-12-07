@@ -4,6 +4,16 @@ from matplotlib import pyplot
 from . import Forecaster
 
 class ArimaForecasterModel(object):
+    '''
+    This is the model used for forecasting. It is an enumerable with one set of the below attributes
+    for each entry. Each entry represents one forecasting horizon
+
+    Attributes
+    ----------
+    model: statsmodels.tsa.arima_model.ARIMA
+        The ARIMA model used for forecasting
+    '''
+
     params = {
         # The number of lag observations included in the model, also called the lag order.
         'p': 3,
@@ -14,6 +24,7 @@ class ArimaForecasterModel(object):
     }
 
     model = None
+
 
 class ArimaForecaster(Forecaster):
     """This is a forecaster based on the
@@ -27,10 +38,28 @@ class ArimaForecaster(Forecaster):
         """
         Constructor of this class which takes an optional model as input.
         If no model is given, it createsa default one.
+        
+        Paramters
+        ---------
+        model: Model of type model_class
+            The model which shall be used.
         """
         super(ArimaForecaster, self).__init__(model)
 
+
+
     def train(self, meters, verbose = False):
+        '''
+        Does the training of the ARIMA model. Each load chunk is translated into 
+        multiple minibatches used for training the network.
+        
+        Parameters
+        ----------
+        meters: nilmtk.DataSet
+            The meters from which the demand is loaded
+        verbose: bool
+            Whether additional output shall be printed during training.
+        '''
         #powerflow = pd.read_csv('15minSampledLoadProfileForForecast.csv') #meters.power_series_all_data(sample_period=900, verbose = True)
         #powerflow[:96*7].plot()
         #plt.show()
@@ -59,7 +88,21 @@ class ArimaForecaster(Forecaster):
             print(residuals.describe())
 
 
-    def forecast(self):
+
+    def forecast(self, meters, timestamp, verbose = False):
+        '''
+        Does the forecasting using the model, which has to be trained before.
+
+        Parameters
+        ----------
+        meters: nilmtk.DataSet
+            The meters from which the demand is loaded.
+        timestamp: [pd.TimeStamp,...] or pd.DatetimeIndex
+            The point in time from which the prognoses is performed.
+        verbose: bool
+            Whether additional output shall be printed during training.
+        '''
+
         series = read_csv('shampoo-sales.csv', header=0, parse_dates=[0], index_col=0, squeeze=True, date_parser=parser)
         X = series.values
         size = int(len(X) * 0.66)

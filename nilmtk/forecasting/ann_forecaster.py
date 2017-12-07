@@ -123,8 +123,11 @@ class AnnForecasterModel(Sequence):
 class AnnForecaster(Forecaster):
     """This is a forecaster based on a distinct artificial neural network (ANN) 
     for each of the the forecasting distances.
+    
+    Attributes
     ----------
-    model_class : The model type, which belonging to the forecaster.
+    model_class: type  
+        The model type, which belonging to the forecaster.
     
     """
 

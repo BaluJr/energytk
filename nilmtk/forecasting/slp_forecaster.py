@@ -7,15 +7,15 @@ import matplotlib.dates as dates
 class SlpForecasterModel(object):
     '''
     This model class contains the slp models which are used for the calculation.
+    
+    Attributes
+    ----------
+    Contains the SLPs and the definition of the seasons.
     '''
+
     params = {
-        # The number of lag observations included in the model, also called the lag order.
-        'p': 3,
-        #The number of times that the raw observations are differenced, also called the degree of differencing.
-        'd': 2,
-        #The size of the moving average window, also called the order of moving average
-        'q': 1 
     }
+
 
     # The Default H0 SLPs 
     WEEK_WINTER = [ 0.0676, 0.0608, 0.0549, 0.0499, 0.0462, 0.0436, 0.0419, 0.0408, 0.0401, 0.0396, 0.0394, 0.0391, 0.0388, 0.0386, 0.0383, 0.0383, 0.0384, 0.0388, 0.0393, 0.0400, 0.0409, 0.0431, 0.0477, 0.0558, 0.0680, 0.0828, 0.0980, 0.1115, 0.1216, 0.1285, 0.1327, 0.1348, 0.1354, 0.1348, 0.1331, 0.1307, 0.1277, 0.1246, 0.1215, 0.1190, 0.1173, 0.1162, 0.1157, 0.1157, 0.1161, 0.1170, 0.1187, 0.1215, 0.1254, 0.1296, 0.1330, 0.1348, 0.1342, 0.1317, 0.1280, 0.1240, 0.1202, 0.1168, 0.1137, 0.1107, 0.1079, 0.1055, 0.1035, 0.1024, 0.1022, 0.1032, 0.1056, 0.1099, 0.1160, 0.1237, 0.1326, 0.1423, 0.1524, 0.1622, 0.1712, 0.1789, 0.1847, 0.1882, 0.1889, 0.1864, 0.1807, 0.1727, 0.1639, 0.1556, 0.1489, 0.1434, 0.1384, 0.1332, 0.1272, 0.1205, 0.1133, 0.1057, 0.0980, 0.0902, 0.0825, 0.0749 ]
@@ -29,6 +29,7 @@ class SlpForecasterModel(object):
     SUN_INTER = [0.0934, 0.0868, 0.0812, 0.0757, 0.0701, 0.0645, 0.0593, 0.0549, 0.0517, 0.0494, 0.0478, 0.0466, 0.0455, 0.0445, 0.0438, 0.0433, 0.0431, 0.0431, 0.0432, 0.0433, 0.0433, 0.0433, 0.0432, 0.0433, 0.0435, 0.0443, 0.0460, 0.0491, 0.0539, 0.0604, 0.0688, 0.0791, 0.0911, 0.1043, 0.1180, 0.1315, 0.1442, 0.1555, 0.1653, 0.1731, 0.1788, 0.1831, 0.1870, 0.1914, 0.1970, 0.2030, 0.2085, 0.2122, 0.2135, 0.2118, 0.2070, 0.1989, 0.1876, 0.1746, 0.1617, 0.1506, 0.1428, 0.1376, 0.1339, 0.1307, 0.1271, 0.1231, 0.1190, 0.1149, 0.1110, 0.1077, 0.1056, 0.1049, 0.1060, 0.1088, 0.1132, 0.1190, 0.1260, 0.1337, 0.1415, 0.1490, 0.1555, 0.1606, 0.1636, 0.1640, 0.1615, 0.1571, 0.1522, 0.1482, 0.1459, 0.1447, 0.1436, 0.1415, 0.1375, 0.1318, 0.1247, 0.1165, 0.1076, 0.0984, 0.0892, 0.0807 ]
     DAY_FACTORS = [1.24203, 1.24392, 1.24568, 1.24730, 1.24878, 1.25014, 1.25137, 1.25247, 1.25344, 1.25430, 1.25503, 1.25564, 1.25613, 1.25650, 1.25677, 1.25691, 1.25695, 1.25688, 1.25670, 1.25642, 1.25603, 1.25554, 1.25495, 1.25426, 1.25347, 1.25259, 1.25161, 1.25055, 1.24939, 1.24814, 1.24681, 1.24539, 1.24389, 1.24230, 1.24064, 1.23889, 1.23707, 1.23517, 1.23320, 1.23116, 1.22904, 1.22686, 1.22460, 1.22228, 1.21990, 1.21745, 1.21494, 1.21237, 1.20974, 1.20705, 1.20431, 1.20151, 1.19866, 1.19575, 1.19280, 1.18979, 1.18674, 1.18365, 1.18051, 1.17732, 1.17409, 1.17082, 1.16752, 1.16417, 1.16079, 1.15737, 1.15392, 1.15043, 1.14692, 1.14337, 1.13979, 1.13619, 1.13256, 1.12890, 1.12522, 1.12152, 1.11779, 1.11405, 1.11029, 1.10650, 1.10270, 1.09889, 1.09506, 1.09122, 1.08736, 1.08350, 1.07962, 1.07573, 1.07184, 1.06794, 1.06404, 1.06012, 1.05621, 1.05229, 1.04838, 1.04446, 1.04054, 1.03662, 1.03271, 1.02880, 1.02489, 1.02099, 1.01710, 1.01321, 1.00934, 1.00547, 1.00161, 0.99776, 0.99393, 0.99011, 0.98630, 0.98251, 0.97873, 0.97497, 0.97122, 0.96750, 0.96379, 0.96011, 0.95644, 0.95279, 0.94917, 0.94557, 0.94200, 0.93845, 0.93492, 0.93142, 0.92795, 0.92451, 0.92109, 0.91770, 0.91434, 0.91102, 0.90772, 0.90445, 0.90122, 0.89802, 0.89486, 0.89173, 0.88863, 0.88557, 0.88254, 0.87956, 0.87661, 0.87369, 0.87082, 0.86799, 0.86519, 0.86244, 0.85972, 0.85705, 0.85442, 0.85183, 0.84928, 0.84678, 0.84432, 0.84191, 0.83954, 0.83721, 0.83493, 0.83270, 0.83051, 0.82837, 0.82628, 0.82423, 0.82223, 0.82028, 0.81838, 0.81653, 0.81473, 0.81298, 0.81128, 0.80962, 0.80802, 0.80647, 0.80497, 0.80352, 0.80213, 0.80078, 0.79949, 0.79825, 0.79707, 0.79593, 0.79485, 0.79383, 0.79286, 0.79194, 0.79107, 0.79026, 0.78950, 0.78880, 0.78815, 0.78756, 0.78702, 0.78654, 0.78611, 0.78574, 0.78542, 0.78516, 0.78495, 0.78480, 0.78470, 0.78466, 0.78468, 0.78475, 0.78487, 0.78505, 0.78529, 0.78558, 0.78593, 0.78633, 0.78679, 0.78731, 0.78788, 0.78850, 0.78918, 0.78991, 0.79070, 0.79155, 0.79244, 0.79340, 0.79440, 0.79546, 0.79658, 0.79775, 0.79897, 0.80025, 0.80158, 0.80296, 0.80440, 0.80588, 0.80742, 0.80902, 0.81066, 0.81236, 0.81410, 0.81590, 0.81775, 0.81965, 0.82160, 0.82360, 0.82565, 0.82774, 0.82989, 0.83209, 0.83433, 0.83662, 0.83896, 0.84134, 0.84377, 0.84625, 0.84877, 0.85134, 0.85395, 0.85661, 0.85931, 0.86205, 0.86484, 0.86767, 0.87054, 0.87345, 0.87641, 0.87940, 0.88243, 0.88551, 0.88862, 0.89177, 0.89495, 0.89818, 0.90144, 0.90473, 0.90806, 0.91143, 0.91483, 0.91826, 0.92172, 0.92522, 0.92875, 0.93230, 0.93589, 0.93951, 0.94315, 0.94683, 0.95053, 0.95425, 0.95800, 0.96178, 0.96558, 0.96941, 0.97325, 0.97712, 0.98101, 0.98492, 0.98884, 0.99279, 0.99675, 1.00073, 1.00473, 1.00874, 1.01276, 1.01680, 1.02085, 1.02491, 1.02898, 1.03306, 1.03715, 1.04125, 1.04536, 1.04947, 1.05358, 1.05770, 1.06182, 1.06594, 1.07006, 1.07419, 1.07831, 1.08243, 1.08655, 1.09066, 1.09476, 1.09886, 1.10295, 1.10704, 1.11111, 1.11517, 1.11922, 1.12326, 1.12728, 1.13129, 1.13528, 1.13925, 1.14320, 1.14714, 1.15105, 1.15494, 1.15880, 1.16264, 1.16645, 1.17024, 1.17400, 1.17772, 1.18142, 1.18508, 1.18871, 1.19230, 1.19586, 1.19938, 1.20286, 1.20630, 1.20970, 1.21305, 1.21636, 1.21962, 1.22284, 1.22601, 1.22912, 1.23219, 1.23520, 1.23816, 1.24106, 1.24391, 1.24669, 1.24942, 1.25208, 1.25468, 1.25722, 1.25969]
 
+
     # The days when to use which load profile
     MID_WINTER = 21;     # 21st jan
     MID_SPRING = 111;    # 20/21st apr
@@ -37,22 +38,32 @@ class SlpForecasterModel(object):
 
 
 class SlpForecaster(object):
-    """
-    Description of class
+    """ Forecastr based on the official standard H0 load profiles.
     This forecaster works the same as the grid operators. It takes each building and applies a 
-    standard load profiles depending on its asset type.
+    standard load profiles. Currently the default H0 profile for domestic homes is used.
     """
+
     Requirement = {'building_type':'ANY VALUE'}
 
     model_class = SlpForecasterModel
 
     def __init__(self, model = None):
+        """
+        Constructor of this class which takes an optional model as input.
+        If no model is given, it createsa default one.
+        
+        Paramters
+        ---------
+        model: Model of type model_class
+            The model which shall be used.
+        """
+
         if model == None:
             model = self.model_class();
         self.model = m = model;
         super(SlpForecaster, self).__init__()
 
-        # Load the slps
+        # Load SLPs
         arrays = [np.array(['Summer', 'Summer', 'Summer', 'Winter', 'Winter', 'Winter', 'Inter', 'Inter', 'Inter']), 
                   np.array(['Weekday', 'Saturday', 'Sunday', 'Weekday', 'Saturday', 'Sunday', 'Weekday', 'Saturday', 'Sunday'])]
         tuples = list(zip(*arrays))
@@ -62,6 +73,8 @@ class SlpForecaster(object):
         
 
     def plot(self):
+        ''' Plots the used standard load profiles. 
+        '''
         sns.set_context("notebook", font_scale=2, rc={"lines.linewidth": 3})
         ax = profiles['Winter'].plot()
         ax.set_ylabel('Factor')
@@ -76,18 +89,31 @@ class SlpForecaster(object):
         i = 1
 
 
-    def predict(self, annual_power, timestamps):
+    def forecast(self, annual_power, timestamps):
         '''
         Returns the power for a certain timestamp in Watts.
-        Paramters:
-        annual_power: The annual_power of the household timeline to predict in KWh/a
-        day:          Timestamp or list of timestamps
+        
+        Parameters
+        ----------
+        annual_power: 
+            The annual_power of the household timeline to predict in KWh/a
+        timestamps: [pd.TimeStamp,...] or pd.DatetimeIndex
+            The point for which a prognoses shall be done.
+
+        Returns
+        -------
+        forecast: pd.Series
+            The produced forecast in kW. 
+            Series contains one entry per input timestamp.
         '''
         m = self.model
         profiles = self.profiles 
-        predictions = []
+        predictions = pd.Series()
 
-        for day in timestamps:
+        for i, day in enumerate(timestamps):
+            if i % 96 == 0:
+                print(i/96)
+
             # Calculate the season interpolation factors
             dayOfYear = day.dayofyear
             if m.MID_WINTER <= dayOfYear < m.MID_SPRING:
@@ -130,6 +156,6 @@ class SlpForecaster(object):
                 result += ((1-share) * profile[lIndex] + share * profile[rIndex]) * shareSeasons[season]
             result *= m.DAY_FACTORS[day.dayofyear-1]
             result *= annual_power
-            predictions.append(result)
+            predictions.loc[day] = result
 
         return predictions

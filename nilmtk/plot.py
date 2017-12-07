@@ -1,7 +1,7 @@
 ''' 
 Plotter to collect all plotting functionality at one place.
-It uses the simple plotting functionalities of the different classes and merges 
-them together.
+If available, it uses simple plotting functionalities included into the different classes.
+Merges them together to create more meaningfull plots.
 '''
 
 from __future__ import print_function, division
@@ -189,6 +189,28 @@ def plot_forecast(gt, forecaster):
     print(model_fit2.summary())
 
 
+def plot_forecast(powerflow, modelfolder, horizons):
+    ''' Plots the forecast along the real powerflow
+    Paramters
+    ---------
+    powerflow: pd.DataFrame
+        The load profile for which the forecast shall be done.
+    modelfolder:
+        The modelfolder, in which all the trained models are placed
+    models:
+        The modelobjects under which the training has been performed.
+    '''
+
+    fig, ax = plt.subplots()
+    powerflow.plot(ax=ax)
+
+    # Load all the trained models
+    models = []
+    for i, folder in enumerate(os.walk(modelfolder)):
+        models.append(C.load_model(folder + "model.cnn"))
+
+
+
 ################################################################
 # Elaborate Powerflow plotting
 def plot_powerflow_from_events(events_list=[], column = 'active transition'):
@@ -217,6 +239,12 @@ def plot_clustering_2d(clusterers, elements, columns_to_project):
     '''
     Plotting of points in 2d space. For K-means and gmm the bordes are also plotted.
     '''
+    print_ellipse = False
+    print_ellipse = True
+    filter = True
+    filter = False
+    color_iter = itertools.cycle(['navy', 'c', 'cornflowerblue', 'gold', 'darkorange'])
+
     # Transform the points into the coordinate system of the covar ellipsoid
     cur_X = cur_X - mean
     v, w = np.linalg.eigh(covar)
@@ -288,3 +316,10 @@ def plot_results(X, Y_, means, covariances, index, title):
         plt.xticks(())
         plt.yticks(())
         plt.title(title)
+
+
+def plot_multiphase_event():
+    '''
+    This function is used to plot multiphase events.
+    '''
+    plot.plot_powerflow_from_events(transients[a][firsts.values[1]:last.values[1]], transients[a].loc[common_transients.index][firsts.values[1]:last.values[1]])

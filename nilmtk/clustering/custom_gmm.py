@@ -49,10 +49,8 @@ def _check_means(means, n_components, n_features):
     ----------
     means : array-like, shape (n_components, n_features)
         The centers of the current components.
-
     n_components : int
         Number of components.
-
     n_features : int
         Number of features.
 

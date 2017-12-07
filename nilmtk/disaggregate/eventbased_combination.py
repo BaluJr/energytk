@@ -38,6 +38,8 @@ class EventbasedCombinationDisaggregatorModel(UnsupervisedDisaggregatorModel):
     transients:    Per phase/sitemeter a list with the transients (start, delta, end, signature)
     centroids:    meta information centroids from clustering 
     [appliances].events: Per appliance/centroid the dataframe with load for each separated appliance
+    params:        Dictionary with the parameters of this Disaggregator. See the default definition
+                   below for description of the available paramters.
     '''
     params = {
         # The noise during measuring
@@ -59,7 +61,6 @@ class EventbasedCombinationDisaggregatorModel(UnsupervisedDisaggregatorModel):
         #  [('power','active'), ('power', 'reactive')]
         'cols': [('power','active')],
 
-
         # If transition is greater than large_transition,
         # then use percent of large_transition
         'percent_tolerance': 0.035,
@@ -69,7 +70,6 @@ class EventbasedCombinationDisaggregatorModel(UnsupervisedDisaggregatorModel):
         
         # Maximal amount of time, an appliance can be on
         'max_on_length' : pd.Timedelta(hours = 2),
-
 
         # Take more switch events to enable more complex state machines.
         'max_baranski_clusters': 7,
@@ -93,29 +93,57 @@ class EventbasedCombinationDisaggregatorModel(UnsupervisedDisaggregatorModel):
 
         # The sample period, in seconds, used for both the
         # mains and the disaggregated appliance estimates.
-        'sample_period':120,
-        
+        'sample_period':120,    
     }
     
+
     def extendModels(otherModel):
         '''
         For unsupervised learning, the extend function for the models 
         is even more important as for the supervised/transfer case,
-        because each data to disaggregate can be seen as new 
-        training data.        
+        because each data to disaggregate can be seen as new training data.        
+
+        Not yet implemented.
         '''
         pass
 
 
 
-def add_segments_improved(params):
+# The following functions are in the global namespace sothat they can be used within the 
+# multiprocessing pool.
+
+def add_segments(params):
     ''' 
     Augment the transients by information about the segment 
+    
+    Paramters
+    ---------
+    transients: [pd.DataFrame, pd.DataFrame, pd.DataFrame]
+        The transients extracted from the original powerflow.
+    states: [pd.DataFrame, pd.DataFrame, pd.DataFrame]
+        The steady_states extracted from the original powerflow.
+    threshold: float
+        The threshold earlier used for extracting the segments.
+    noise_level: float
+        The noiselevel earlier used for extracting the segments.
+    
+    Returns
+    -------
+    transients: pd.DataFrame
+        The input transients extended by the following columns:
+        - segment:  A string identifier, which is the same for 
+                    all transients belongin to the same segment.
+        - segmentsize: The size of the segment. Amount of transients
+                       Inside the section.
+          spike:    An additional feature extracted from the signature 
+                    of each transient. The highest peak power during 
+                    the transient of an upevent / lowest power during 
+                    the transients of an downevent.
     '''
+
     transients, states, threshold, noise_level = params
     
     # Add segment information
-    #indices = np.array(states.index)
     values = np.array(states.iloc[:,0])
     sections = find_sections((values, noise_level))
     transients['segment'] = pd.Series(data = sections, index = transients.index).shift().bfill()
@@ -133,20 +161,32 @@ def add_segments_improved(params):
     transients.loc[transients['active transition'] < 0, 'spike'] =  transients[transients['active transition'] < 0]['signature'].apply(lambda sig: np.cumsum(sig).min())
     transients.loc[transients['active transition'] < 0, 'spike'] -= transients.loc[transients['active transition'] < 0, 'active transition']
     #transients.loc[transients['active transition'] < 0, 'spike'] = transients.loc[transients['active transition'] < 0, 'spike'].clip(upper=0)
-    #transients['length'] = transients['ends'] - transients['starts']
 
     return transients
 
 
 
-def fast_groupby(df, use_additional_grp_field = False):
+def fast_groupby(df):
     '''
     Does a fast groupby as used for creating the 3-size and 4-size events.
+    By unsing numpy it is faster than the pandas version. 
+    The fields to incoporate are taken as needed for our disaggregation.
+    Returns runs of an appliance.
+
+    Parameters
+    ----------
+    df: pd.DataFrame
+        Pandas DataFrame to group
+
+    Returns
+    -------
+    df: pd.DataFrame.  T
+        The grouped dataframe, which can then used as an input for the clustering.
     '''
-    df = df[['segment', 'active transition', 'starts', 'ends', 'spike']]#, 'length']]
+
+    df = df[['segment', 'active transition', 'starts', 'ends', 'spike']]
     df = df.sort_values(['segment','starts'])
     df['duration'] = (df['starts'] - df.shift()['ends']).dt.seconds
-    #df['length'] = df['length'].apply(lambda e: e.seconds)
     df.drop(columns=['starts', 'ends'], inplace=True)
     values = df.values
     keys, values = values[:,0], values[:,1:]
@@ -175,8 +215,22 @@ def fast_groupby(df, use_additional_grp_field = False):
 
 def fast_groupby_with_additional_grpfield(df):
     '''
-    Does a fast groupby as used for creating the 3-size and 4-size events.
+    Special version of the fast groupby, that is used for creating the 2-size events from the 
+    4 size events. In this case the additional group-field has to be incorporated into the grouping.
+    By unsing numpy it is faster than the pandas version. 
+    The fields to incoporate are taken as needed for our disaggregation.
+    Returns runs of an appliance.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Pandas DataFrame to group
+
+    Returns
+    -------
+    pd.DataFrame.  The grouped dataframe which can be used as an input for the clustering.
     '''
+
     df = df[['segment', 'grp', 'active transition', 'starts', 'ends', 'spike']]
     df = df.sort_values(['segment','grp', 'starts'])
     df['duration'] = (df['starts'] - df.shift()['ends']).dt.seconds
@@ -185,97 +239,43 @@ def fast_groupby_with_additional_grpfield(df):
     ukeys,index=np.unique(keys[:,0] + keys[:,1].astype(str), return_index = True) 
     result = []
     
-    # Twoevents    
+    # This version only supports twoevents    
     for arr in np.vsplit(values,index[1:]):
         result.append(np.array([np.sum(np.abs(arr[:,0]))/2, arr[0,0] + arr[1,0], arr[0,1] - arr[0,0], arr[1,1]-arr[1,0], arr[1,2]])) # arr[:,2]]))#, arr[1:,3]]))
     cols = ['transition_avg', 'transition_delta', 'spike_up', 'spike_down', 'duration']
     idx = pd.MultiIndex.from_arrays([df.loc[::2,'segment'],df.loc[::2,'grp'].values])
     df2 = pd.DataFrame(index = idx, data = result, columns=cols)
-    #df2['grp'] = df.loc[::2,'grp'].values
     return df2
-
-
-
-def myviterbi(segment, appliances):
-    '''
-    Own implementation of the viterbi algorithm, which is used to identify the 
-    known appliances inside the powerflow.
-    '''
-    
-    # For each event the mapping to which statemachine-step it may belong
-    event_to_statechange = [[] for i in range(len(segment))]
-    rows = segment[['active transition','spike']]
-    for i, appliance in enumerate(appliances):
-        for step in range(appliance['length']):
-            valids = appliance[step].predict(rows.values) == 1   # -1 means outlier!!!
-            for j, valid in enumerate(valids):
-                if valid:
-                    event_to_statechange[j].append((i, step))
-
-    # Create the lookup for Matrices: T1=Distances, T2=Matches, T3=Path
-    idx = pd.IndexSlice
-    multindex = pd.MultiIndex(levels=[[] for _ in range(len(appliances))],
-                            labels=[[] for _ in range(len(appliances))],
-                            names=range(len(appliances)))
-    state_table = pd.DataFrame(index = multindex, columns = ['T1', 'T2', 'T3', 'new'])
-    startstate = tuple(np.zeros(len(appliances)))
-    state_table.loc[startstate,:] = [0, 0, "", -1]
-        
-    # Find the best path
-    t0 = time.time()
-    for i, transient in segment.iterrows():
-        print(str(i) + ': ' + str(time.time()-t0))
-        i = transient['segplace']
-        for appliance, step in event_to_statechange[i]:
-            # Create retrieval for all availbale states in statestable (All before appliance slices)
-            lookup = [slice(None) for _ in range(appliance)]
-            lookup.append([step])
-            
-            # Check if these steps work out
-            try: 
-                rows = state_table[state_table['new'] != i].loc[tuple(lookup), :].iterrows()
-            except KeyError:
-                rows = []
-            for curstate, outgoing_state in rows: 
-                
-                # Ich muss hier weiter machen indem ich prüfe warum so viele Events möglich sind! 
-                # 1. Unnoetige Appliances entfernen
-                # 2. Fehler beheben, dass gleicher State mehrfach appended, weil anstatt dem 'new' flag auch ein 'im step bereits geupdated' flag rein muesste.
-                
-                cost = appliances[appliance][step].mahalanobis([transient[['active transition','spike']]])[0]
-                newstate = list(curstate)
-                newstate[appliance] = (newstate[appliance] + 1) % appliances[appliance]['length']
-                newstate = tuple(newstate) 
-
-                # Calc the new values
-                newcost = outgoing_state['T1'] + cost
-                newmatches = outgoing_state['T2']
-                if newstate[appliance] == 0:
-                    newmatches += 1
-                new_path = outgoing_state['T3'] + ";" + str(i) + "," + str(appliance)
-
-                if (not (newstate in state_table.index)):     # not yet existing
-                    state_table.loc[newstate,:] = [newcost, newmatches, new_path, i]                   
-                elif(                                                                   
-                        newmatches > state_table.loc[newstate,'T2'] or                                                  # more matches
-                        ((newmatches == state_table.loc[newstate,'T2']) and (newcost < state_table.loc[newstate,'T1'])) # less cost
-                    ):
-                    state_table.loc[newstate,:3] = [newcost, newmatches, new_path]
-
-    # The best path which ends in zero state is result
-    T1, T2, T3, new = state_table.loc[startstate]
-    labels = [-1] * len(segment)
-    for cur in T3.split(";")[1:]:
-        location, appliance = eval(cur)
-        labels[location] = appliance
-    return labels
 
 
 
 def myviterbi_numpy(segment, appliances):
     '''
-    Own implementation of the viterbi algorithm, which is used to identify the 
-    known appliances inside the powerflow.
+    Simplified version of the viterbi algorithm, which is used to identify the 
+    known appliances within the longer segments.
+
+    Paramters
+    ---------
+    segment: pd.DataFrame
+        DataFrame of the transients within the current segment
+    appliances: [dic, ...]
+        Definition of the appliances. Defined within a dictionary. The dictionary 
+        contains the following properties:
+        - 1..n_events: For each event within the signature of the appliance as a
+                       sklearn.covariance.EllipticEnvelope.
+        - length:      length of the appliance signature (2, 3 or 4)
+        - subtype:     The subtype of the appliance
+        - appliance:   The appliance label this appliance is
+        The last 3 properties are needed to map back to the original transient 
+        dataframe.
+    
+    Returns
+    -------
+    labels: np.ndarray<int>
+        For each event in the segment the appliance it belongs to. BUT pay attention
+        this label is relative to the appliances dictionary the function gets as an
+        input. To get the real segmentsize-subtype-appliance triple, one has to get 
+        it from the appliance dictionaries first.
     '''
     
     # For each event the mapping to which statemachine-step it may belong
@@ -283,7 +283,7 @@ def myviterbi_numpy(segment, appliances):
     rows = segment[['active transition','spike']]
     for i, appliance in enumerate(appliances):
         for step in range(appliance['length']):
-            valids = appliance[step].predict(rows.values) == 1   # -1 means outlier!!!
+            valids = appliance[step].predict(rows.values) == 1   # -1 means outlier
             for j, valid in enumerate(valids):
                 if valid:
                     event_to_statechange[j].append((i, step))
@@ -300,7 +300,6 @@ def myviterbi_numpy(segment, appliances):
     # Find the best path
     t0 = time.time()
     for i, transient in segment.iterrows():
-        #print(str(i) + ": " + str(time.time()-t0))
         i = transient['segplace']
 
         # Do the calculation for this step
@@ -351,7 +350,8 @@ def myviterbi_numpy(segment, appliances):
 
 def remove_inconfident_elements(transients):
     '''
-    Remove elements which are insecure
+    Remove elements which are insecure.
+    Not used at the moment.
     '''
     shorten_segment = lambda seg: seg[:seg.rfind('_', 0, -2)]
     new_segments = transients[~transients['confident']]['segment'].apply(shorten_segment)
@@ -361,19 +361,139 @@ def remove_inconfident_elements(transients):
 
 
 
-def find_appliances(params):
-    ''' 
-    Augment the transients by information about the appliances 
+def separate_simultaneous_events(self, transients, steady_states, noise_level):
     '''
+    This function finds the common transients in the list of transients.
+    The equal ones are removed from the timelines and then returned as 
+    a dedicated timeline.
+    As there are curently no appliances connected to all three phases, only two
+    phase connected events are considered.
+
+    Paramters
+    ---------
+    transients: [pd.DataFrame, pd.DataFrame, pd.DataFrame]
+        The steady_states where the multiphase appearances are removed from.
+    steady_states: [pd.DataFrame, pd.DataFrame, pd.DataFrame]
+        The steady_states where the multiphase appearances are removed from.
+    noise_level: float
+        The noiselevel earlier used for extracting the segments.
+    
+    Returns
+    -------
+    transients: [pd.DataFrame, pd.DataFrame, pd.DataFrame, ...]
+        The transients where the multiphase sections are removed from the original three
+        DataFrames and added to separate new DataFrames.
+    steady_states: [pd.DataFrame, pd.DataFrame, pd.DataFrame, ...]
+        The transients where the multiphase sections are removed from the original three
+        DataFrames and added to separate new DataFrames.
+    '''
+
+    # When only one powerflow, no simultaneous events
+    if len(transients) <= 1:
+        return
+    new_transients = []   
+    new_steady_states =[]
+        
+    # Events over all phases not yet supported
+    common_transients = pd.concat(transients, join='inner', axis=1)
+    transitions = common_transients['active transition']
+    abc_same_size = transitions.std(axis=1) < 0.1 * transitions.mean(axis=1)
+    if not common_transients.empty and (abc_same_size.sum() / len(common_transients)) > 0.1:
+        raise('There is a three phase appliance, which is not supported yet.')
+                
+    # Find simultaneous events between the pairs of phases
+    for a, b in [(0,1),(0,2),(1,2)]:
+        common_transients = pd.concat([transients[a], transients[b]], join='inner', axis=1)
+
+        # Find regions where common powersource active (Only oven on multiple lines -> Pattern)
+        to_cluster = (common_transients.index - pd.Timestamp("1.1.2000", tz="UTC")).total_seconds()
+        to_cluster = np.expand_dims(to_cluster.values, 1)
+        dbs = DBSCAN(eps=300, min_samples=5)
+        labels = dbs.fit_predict(to_cluster)
+        common_transients['labels'] = labels
+        grps = common_transients.reset_index()[['starts', 'labels']].groupby('labels')
+            
+        # Add the powerflows in between
+        firsts = grps.first()
+        lasts = grps.last()
+        confident_common_transients = [pd.DataFrame(), pd.DataFrame(), pd.DataFrame()]
+        for fst, lst in zip(firsts.values[1:],lasts.values[1:]):
+            for i in [a,b]:
+                # Use sections to find elements, which belong together
+                cur = transients[i][fst:lst]
+                prev_value = steady_states[i].iloc[transients[i].index.get_loc(fst)-1]
+                values = np.append(np.array(prev_value[0]), steady_states[i][fst:lst].iloc[:,0])
+                sections = pd.Series(find_sections((values, noise_level))).shift()[1:] # First was added before
+                invalids = cur.index[(sections == "")]
+                cur.drop(invalids, inplace = True)
+                if cur.empty:
+                    continue
+                
+                # Correct smaller aberations and add new 
+                sum = cur.sum()['active transition']
+                cur.loc[cur.index[-1], 'active transition'] -= sum
+                confident_common_transients[i] = confident_common_transients[i].append(cur) #.add_suffix(str(i))
+
+                # Adapt the original powerflow sothat removal invisible in real powerflow
+                steady_states[i].drop(cur.index, inplace = True)
+                transients[i].drop(cur.index, inplace = True)
+                transients[i].loc[invalids,'active transition'] = steady_states[i].loc[invalids,'active average'] - steady_states[i].shift(1).loc[invalids,'active average']
+                    
+        # Create the new events 
+        common_transients = pd.concat(confident_common_transients, axis=1)
+        common_transients['active transition'] = common_transients['active transition'].sum(axis=1)
+        signatures = common_transients.loc[:,'signature']
+        common_transients = common_transients.loc[:,~common_transients.columns.duplicated()]
+        up = common_transients['active transition'] > 0
+        common_transients.loc[up,'signature'] = signatures.loc[up,'signature'].fillna(0).applymap(lambda sig: np.max(np.cumsum(sig))).sum(axis=1)
+        common_transients.loc[~up,'signature'] = signatures.loc[~up,'signature'].fillna(0).applymap(lambda sig: np.min(np.cumsum(sig))).sum(axis=1)
+        # End is set to nonsense here as it is not used later on either way
+        common_transients['ends'] = common_transients.index + pd.Timedelta('4s')
+  
+        # Create and add the new transients 
+        new_transients.append(common_transients)
+        new_states = pd.DataFrame(common_transients['active transition'].cumsum())
+        new_states.rename(columns={'active transition':'active average'}, inplace = True)
+        new_steady_states.append(new_states)
+
+    # Reset the new results
+    transients.extend(new_transients)
+    steady_states.extend(new_steady_states)        
+    return transients, steady_states
+
+
+
+def find_appliances(params):
+    ''' Assign labels to the transients, defining the appliances they belong to.
+    
+
+    Paramters
+    ---------
+    transients: pd.DataFrame
+        The transients which are processed and clustered to assign them to appliances
+    state_threshold: float
+        The threshhold earlier used for extracting the segments.
+    
+    Returns
+    -------
+    transients: pd.DataFrame
+        The input transients extended by the following columns:
+        - subtype:  A field defining the clusterer, that is responsible for the assignment
+                    to the appliance
+        - appliance: the appliance the transient belongs to
+        - confident: If set to true, one can be confident, that the clustering is reasonable.
+    clusterer: dic<str, pd.GaussianMixture>
+        Dictionary which contains for each subtype the corresponding GaussianMixture
+        used during clustering.
+    '''
+
     transients, state_threshold = params
     clusterers = {}
     
     # Separate the two-flag events 
     twoevents = transients[transients['segmentsize'] == 2]
     twoevents = fast_groupby(twoevents)
-    new_clusterers, subtypes, labels, confidences = _gmm_clustering_hierarchical(twoevents, "2", max_num_clusters = [6, 4], dim_scaling = {'transition_avg':3}, check_for_variance_dims=['transition_avg'])
-    #clusterers['2'] = clusterer
-    #tmp = _gmm_confidence_check(twoevents, labels, clusterer, ['transition_avg'])
+    new_clusterers, subtypes, labels, confidences = _gmm_clustering_hierarchical(twoevents, "2", max_num_clusters = [6, 4], dim_scaling = {'transition_avg':3}, check_for_variance_dims=['transition_avg'], single_only=True)
     clusterers = {**clusterers, **new_clusterers}
     twoevents['confident'] = confidences
     twoevents['appliance'] = labels
@@ -393,10 +513,8 @@ def find_appliances(params):
     for type in range(2):
         name = "3_" + str(type)
         cur_threeevents = threeevents[threeevents['subtype'] == type].drop(columns=['subtype', 'appliance', 'confident'])
-        new_clusterers, subtypes, labels, confidences = _gmm_clustering_hierarchical(cur_threeevents, name ,max_num_clusters = 10, check_for_variance_dims=['fst', 'sec', 'trd'])
-        #_gmm_confidence_check(cur_threeevents , labels, clusterer, ['fst', 'sec', 'trd'])
+        new_clusterers, subtypes, labels, confidences = _gmm_clustering_hierarchical(cur_threeevents, name ,max_num_clusters = 10, check_for_variance_dims=['fst', 'sec', 'trd'], single_only=True)
         clusterers = {**clusterers, **new_clusterers}
-        #clusterers['3_' + str(type)] = clusterer
         threeevents.loc[threeevents['subtype'] == type, 'confident'] = confidences
         threeevents.loc[threeevents['subtype'] == type, 'appliance'] = labels
         threeevents.loc[threeevents['subtype'] == type, 'subtype'] = subtypes
@@ -405,6 +523,7 @@ def find_appliances(params):
     transients.drop(["appliancethree", "confidentthree", "subtypethree"],axis=1, inplace = True)
     transients['confident'] = transients['confident'].astype(bool) # whyever this is needed
     #transients = remove_inconfident_elements(transients)
+
 
     ## Separate the four-flag events
     allfourevents = transients[transients['segmentsize']==4]
@@ -454,17 +573,15 @@ def find_appliances(params):
     for type in range(4):
         name = "4_" + str(type)
         events_to_cluster = rest_fourevents[rest_fourevents['subtype'] == type].dropna(axis=1)
-        new_clusterers, subtypes, labels, confidences = _gmm_clustering_hierarchical(events_to_cluster, name, max_num_clusters = 10)
+        new_clusterers, subtypes, labels, confidences = _gmm_clustering_hierarchical(events_to_cluster, name, max_num_clusters = 10, single_only=True)
         clusterers = {**clusterers, **new_clusterers}
         rest_fourevents.loc[rest_fourevents['subtype'] == type, 'confident'] = confidences
         rest_fourevents.loc[rest_fourevents['subtype'] == type, 'appliance'] = labels
         rest_fourevents.loc[rest_fourevents['subtype'] == type, 'subtype'] = subtypes
-        #clusterers['4_' + str(type)] = clusterer
-        #rest_fourevents.loc[rest_fourevents['segsubtype'] == type, 'confident'] = _gmm_confidence_check(rest_fourevents[rest_fourevents['segsubtype'] == type].dropna(axis=1), labels, clusterer, ['fst', 'sec', 'trd', 'fth'])
-        #rest_fourevents.loc[rest_fourevents['segsubtype'] == type, 'appliance'] = labels
     transients = transients.join(rest_fourevents[['appliance', 'subtype', 'confident']], on="segment", rsuffix="four")
     transients.update(transients[['appliancefour',  'subtypefour', 'confidentfour']].rename(columns={'appliancefour':'appliance', 'subtypefour':'subtype', 'confidentfour':'confident'}))
     transients.drop(["appliancefour", 'subtypefour', 'confidentfour'],axis=1, inplace = True)
+
 
     # Build identified appliances (outlier detections for the events of the appliances, and remove too small)
     transients['segplace'] = transients.groupby(['segment', 'grp']).cumcount()
@@ -481,7 +598,7 @@ def find_appliances(params):
         appliances.append(cur_appliance)
     print("##################### " + str(len(appliances)))
 
-    # Process longer sections Baranski Style
+    # Now find the appliances within the longer segments
     all_segments = str(len(transients[transients['segmentsize'] > 4]['segment'].unique()))
     segi = 0
     t0 = time.time()
@@ -497,47 +614,34 @@ def find_appliances(params):
             reallabels.iloc[i,:] = [a['length'], a['subtype'], a['appliance']]
         transients.loc[transients['segment'] == segmentid, ['segmentsize','subtype','appliance']] = reallabels
 
-
-    # In the very last step, really only look onto remaining part
-    #transients = pckl.load(open('remaining_transients.pckl', 'rb'))
-    # Calculate the characteristics: Mean Power, StdDev, Cumulative, Length 
-    #transients["confident"] = transients["confident"].astype(bool)
-    #for segment, transients in transients[~transients["confident"]].groupby('segment'):
-    #    num = len(transients)
-    #    length = transients.iloc[-1]['ends'] - transients.iloc[1]['starts']
-    #    cum = transients['active transition'].cumsum()
-    #    deltas =(transients['starts'].shift(-1) - transients['starts']).dt.seconds
-    #    energy = cum * deltas
-    #    cum_energy = energy.cumsum()
-    #    bins = pd.cut(cum_energy,4, retbins=True)[1]
-    # Cluster segments after their criteria
-    #clusterer, labels = _gmm_clustering(rest_fourevents[rest_fourevents['segsubtype'] == type].dropna(axis=1), max_num_clusters = 10)
-    #_gmm_confidence_check(rest_fourevents[rest_fourevents['segsubtype'] == type].dropna(axis=1), labels, clusterer, ['fst', 'sec', 'trd', 'fth'])
-    #remaining_transients = transients[(transients['segmentsize']>4) & (transients['appliance'] == -1)]
-    #for seg, rows in remaining_tranients.groupby['segment']:
-    #    pass    
-    #cluster, labels, clusterer = self._cluster_events(cluster_ext, max_num_clusters=self.model.params['max_baranski_clusters'], all_columns = True)
-    #cluster_ext['labels'] = labels
-    #segment.join(cluster_ext['labels'], on="labels", rsuffix='_cluster')
-
-    # Now check between segments whether same 
-    #f = lambda a: set(a)
-    #segmentsperappliance = groupby('appliance').agg({'segment':f})
-    # Cluster the segmentevents 
-    #cluster, label, clusterer = self._cluster_events(segmentevents)
-    #    # Die Label anhaengen
-
     transients['segmentsize'] = transients['segmentsize'].astype(int)
     return {'transients':transients, 'clusterer':clusterers}
 
 
 
 def create_appliances(params):
-    ''' 
-    Create the appliances after the labels have been added 
+    ''' Creates the appliances from the labeled events.
 
-    Paramters:
-    exact_nilm_datastore: When set to true, also return the full resolution result.
+    Paramters
+    ---------
+    transients: pd.DataFrame
+        The transients among which appliances are searched.
+    overall_powerflow: pd.DataFrame
+        The overall_powerflow with 5min resolution, which was generated during creation.
+    exact_nilm_datastore: bool 
+        When set to true, also return the full resolution result.
+    
+    Returns
+    -------
+    appliances: pd.DataFrame
+        Powerflow of the succesfully disaggregated appliances.
+        Currently a resolution of 5 minutes.
+    overall_powerflow: pd.DataFrame
+        The rest powerflow which remains after summing up all successfully disaggregated appliances.
+        Currently a resolution of 5 minutes.
+    exact_nilm: Optional
+        If 'exact_nilm_datastore' is set to true, then this field contains a dataframe which stores 
+        the flags at there exact point in time.
     '''
 
     transients, overall_powerflow, min_appearance, exact_nilm_datastore = params
@@ -596,19 +700,21 @@ def create_appliances(params):
 
 
 def _gmm_clustering(events, max_num_clusters=5, exact_cluster=None, dim_scaling = {}, dim_emph = {}):
-    '''
-    This is the clustering method used in the productive system
+    '''The core clustering method.
+    Does the clustering by using gaussian mixture models.
 
-    Paramters:
-    dim_scaling: Scaling of certain dimensions of the input. Won't affect GMM but the k-means initialization.
-    dim_emph: Increase importance of certain dimensions during E-step of EM-algorithm. All other dimensions' 
-                covariances are scaled by this value.
+    Paramters
+    ---------
+    dim_scaling: 
+        Scaling of certain dimensions of the input. Won't affect GMM but the k-means initialization.
+    dim_emph: 
+        Increase importance of certain dimensions during E-step of EM-algorithm. All other dimensions' 
+        covariances are scaled by this value.
     '''
     
     # Special case:
     if len(events) < len(events.columns): 
         return None, (np.ones(len(events))*-1)
-        #return np.array([events.iloc[0]["active transition"]]), np.array([0])
 
     # Preprocess dataframe
     mapper = DataFrameMapper([(column, None) for column in events.columns])
@@ -638,43 +744,54 @@ def _gmm_clustering(events, max_num_clusters=5, exact_cluster=None, dim_scaling 
         gmm.fit(clustering_input)
         cur_bic = gmm.bic(clustering_input)
         if cur_bic < best_bic:
-            best_gmm = gmm #1 - color import matplotlib.cm as cm; ax.scatter(clustering_input[:2000][:,1],clustering_input[:2000][:,2],clustering_input[:2000][:,3], c = list((color*1000).astype(int)), cm = 'binary', s = 2)
-            best_bic = cur_bic #np.repeat(color, 3, axis= 0).reshape(len(color),3)
+            best_gmm = gmm
+            best_bic = cur_bic
             
     return best_gmm, best_gmm.predict(clustering_input)
 
 
 
 def _gmm_confidence_check(X, prediction, clusterer, check_for_variance_dims, return_subclustering_recommendation = False):
-    '''
-    This function checks whether we can be sure about the assignment of an event.
-    We have two checks we use:
+    ''' Checks whether we can be sure about the assignment of an event.
+    
+    The following checks are performed:
     - 1. When the cluster has a too large StdDev 
     - 2. When the cluster is too small checks whether the points X, Y lie in the 
     - 3. If probability is lower than 80% 
     - 4. If the event is higher than 80% but lies outside the 3 sigma confidence intervall of the gmm distribution.
-    Returns an array with the entries set to true, when element lies in cofidence interval.
+    
 
-    Paramters:
-        -check_for_variance_dims: The dimensions which are looked at to check for variance.
-        -return_subclustering_recommendation: returns for each cluster whether it would be reasonable to subcluster
+    Parameters
+    ----------
+    X: pd.DataFrame
+          The events to cluster
+    prediction: pd.Series
+        The applince of each element, it has been applied to.
+    clusters: scikit.MixtureModel
+        The clusterer responsible for the events
+    check_for_variance_dims: list
+        The given columns are considered to exclude a cluster because of too high variance
+    return_subclustering_recommendation: bool
+        When set to true, the result contain a hint, whether it is worth to subcluster a certain clustering.
+
+    Returns
+    -------
+    confidence: np.array<bool>
+        Values definde, whether the appliance is confident for a certain event
+    subclustering: np.array<bool>
+        For each cluster defines whether it is reasonable to create a subcluster.
     '''
 
     if (prediction == -1).all():
         return np.zeros(len(X)).astype(bool)
 
-    # Take when probability > 90% and not outside 2 sigma interval or when inside the 1sigma interval
     subcluster_recommendations = []
-    print_ellipse = False
-    print_ellipse = True
-    filter = True
-    filter = False
-    color_iter = itertools.cycle(['navy', 'c', 'cornflowerblue', 'gold', 'darkorange'])
     confident = np.zeros(X.shape[0]).astype(bool)
     unique, counts = np.unique(prediction, return_counts=True)
     avg_clustersize = np.mean(counts)
     counts = dict(zip(unique, counts))
     for i, (mean, covar, color) in enumerate(zip(clusterer.means_, clusterer.covariances_, color_iter)):
+
         # 1. Exclude clusters with too high stddev
         indices = np.where(np.in1d(X.columns, check_for_variance_dims))[0]
         stddevs = np.sqrt(covar.diagonal()[indices])
@@ -698,33 +815,6 @@ def _gmm_confidence_check(X, prediction, clusterer, check_for_variance_dims, ret
         # 4. If not 90% sure, take at least the ones inside the one sigma environment
         confident[cur] |= (spatial.distance.cdist(cur_X, np.expand_dims(mean, 0), 'mahalanobis', VI=linalg.inv(covar)) < 1).squeeze()
 
-        
-        # Transform the points into the coordinate system of the covar ellipsoid
-        #cur_X = cur_X - mean
-        #v, w = np.linalg.eigh(covar)
-        #std_dev = np.sqrt(v) # * np.sqrt(2)
-        #transformed_points = cur_X.dot(w.T)
-        
-        #tst = spatial.distance.mahalanobis(cur_X, mean, linalg.inv(covar))
-        #tst = spatial.distance.cdist(cur_X+mean, np.expand_dims(mean, 0), 'mahalanobis', VI=linalg.inv(covar))
-        # If not 90% sure take at least the ones inside the one sigma environment
-        #confident_tmp = (np.sum(transformed_points**2 / (1*std_dev)**2 , axis = 1) < 1)
-        #for confidence_intervall in range(1.1,2.6,0.1):
-        #    confident_tmp.append(np.sum(transformed_points**2 / (confidence_intervall*std_dev)**2 , axis = 1) < 1)
-        #confident[cur] |= (np.sum(transformed_points**2 / (1*std_dev)**2 , axis = 1) < 1)
-        #tst = spatial.distance.mahalanobis(cur_X, mean, linalg.inv(covar))
-
-        # Plot an ellipse to show the Gaussian component
-        #plt.scatter((cur_X+mean)[:,2], (cur_X+mean)[:, 3], 5, c=confident[cur])
-        #if print_ellipse:
-        #    v = 2. * np.sqrt(2.) * np.sqrt(v)      #Wurzeln, weil StdDev statt varianz, *2 da Diameter statt Radius, *sqrt(2)??
-        #    #u = w[0] / linalg.norm(w[0])          Normalisiert ist es eigentlich schon!
-        #    angle = np.arctan(w[0][1] / w[0][0])
-        #    angle = 180. * angle / np.pi  # convert to degrees
-        #    ell = mpl.patches.Ellipse(mean, v[0], v[1], 180. + angle, color='gold')
-        #    ell.set_clip_box(fig.bbox)
-        #    ell.set_alpha(0.5)
-        #    fig.axes[0].add_artist(ell)
     if return_subclustering_recommendation:
         return confident.astype(bool), subcluster_recommendations
     else:
@@ -732,14 +822,43 @@ def _gmm_confidence_check(X, prediction, clusterer, check_for_variance_dims, ret
 
 
 
-def _gmm_clustering_hierarchical(events, name, max_num_clusters=[5,5], check_for_variance_dims = [[],[]], dim_scaling = [{},{}], dim_emph = [{},{}]):
+def _gmm_clustering_hierarchical(events, name, max_num_clusters=[5,5], check_for_variance_dims = [[],[]], dim_scaling = [{},{}], dim_emph = [{},{}], single_only = True):
     '''
     This function does the clustering in a hierarchical way.
     That means, that too large clusters of the first step are again clustered.
-
     All paramters contain multiple two inputs. For the first and the second clustering step.
+    
+    Parameters
+    ----------
+    events: pd.DataFrame
+        The events to cluster
+    name: string
+        The name of the cluster to build. Namely its size ("2", "3", "4")
+    max_num_clusters: [int, int]
+        The mount 
+    check_for_variance_dims: list
+        The given columns are considered to exclude a cluster because of too high variance
+    dim_scaling = [float, float] 
+        Scales a certain dimension in a preprocessing step. This does not include GMM but the results of 
+        the K-means which is used to find the starting values for Gmm
+    dim_emph = [{},{}], 
+        Emphasizes a certain dimension of the clustering of appliances. This is done by scaling the covariance
+        of the GMM's EM-algorthms.
+    single_only: bool
+        When set to true only a single step of clustering is performed. Deactivates hierarchical clustering.
+
+    Returns
+    -------
+     clusterers: dict<str, scikit.GaussianMixture>
+        Dictionary mapping from a subtype to a clusterer
+     subtypes: np.array<str>
+        A string specifying the clustering step.
+     labels: np.array<int>
+        The appliances a certain event has been clustered to.
+     confidence: np.array<bool>
+        Values definde, whether the appliance is confident for a certain event
     '''
-    # If single value given, create lists
+    # If single value given, automatically create lists
     if not type(max_num_clusters) is list:
         max_num_clusters=[max_num_clusters, max_num_clusters]
     if not type(check_for_variance_dims) is list:
@@ -760,37 +879,61 @@ def _gmm_clustering_hierarchical(events, name, max_num_clusters=[5,5], check_for
     # Check confidence
     confidence, subclustering = _gmm_confidence_check(events, labels, clusterer, check_for_variance_dims=check_for_variance_dims[0], return_subclustering_recommendation=True)
     
-    # Second round of clustering
-    for mastercluster in subclustering:
-        sub_name = name + "_" + str(mastercluster)
-        cur_cluster = (labels == mastercluster)
-        to_subcluster = events[cur_cluster]
-        sub_clusterer, sub_labels = _gmm_clustering(to_subcluster, max_num_clusters=max_num_clusters[1], dim_scaling=dim_scaling[1], dim_emph=dim_emph[1])
-        sub_confidence = _gmm_confidence_check(to_subcluster, sub_labels, sub_clusterer, check_for_variance_dims=check_for_variance_dims[1])
-        labels[cur_cluster] = sub_labels
-        confidence[cur_cluster] = sub_confidence
-        subtypes[cur_cluster] = sub_name
-        clusterers[sub_name] = sub_clusterer
+    # Second round of clustering if not removed
+    if not single_only:
+        for mastercluster in subclustering:
+            sub_name = name + "_" + str(mastercluster)
+            cur_cluster = (labels == mastercluster)
+            to_subcluster = events[cur_cluster]
+            sub_clusterer, sub_labels = _gmm_clustering(to_subcluster, max_num_clusters=max_num_clusters[1], dim_scaling=dim_scaling[1], dim_emph=dim_emph[1])
+            sub_confidence = _gmm_confidence_check(to_subcluster, sub_labels, sub_clusterer, check_for_variance_dims=check_for_variance_dims[1])
+            labels[cur_cluster] = sub_labels
+            confidence[cur_cluster] = sub_confidence
+            subtypes[cur_cluster] = sub_name
+            clusterers[sub_name] = sub_clusterer
 
     # Return the overall results (distinguish by subtype)
     return clusterers, subtypes, labels, confidence
+
 
 
 def _gmm_hierarchical_predict_and_confidence_check(name, events, clusterers, check_for_variance_dims=[]):
     '''
     This function does the prediction and the subsequent confidence check.
     Used for the twoevents inside the fourevents.
+    
+    Parameters
+    ----------
+    name: string
+        The name of the cluster to build. Namely its size ("2", "3", "4")
+    events: pd.DataFrame
+        The events to cluster
+    clusterers: dict<str, scikit.GaussianMixture>
+        Dictionary mapping from a subtype to a clusterer
+    check_for_variance_dims: list
+        The given columns are considered to exclude a cluster because of too high variance
+    
+    Returns
+    -------
+     labels: np.array<int>
+        The appliances a certain event has been clustered to.
+     subtypes: np.array<str>
+        A string specifying the clustering step.
+     confidence: np.array<bool>
+        Values definde, whether the appliance is confident for a certain event
     '''
+
+    # Find the relevant clusterer
     main_clusterer = clusterers[name]
     sub_clusterers = []
     for k in clusterers.keys(): 
         if k.startswith(name + "_"):
             sub_clusterers.append(k)
 
+    # Do a prediction and subpredict if subclusterer available
     labels = main_clusterer.predict(events)
     confident = -np.ones(len(events))
     subtypes = np.empty(shape =(len(events),),  dtype=object)
-    #confident = np.zeros(len(events)).astype(bool)
     for sub_clusterer in sub_clusterers:
         cur = labels == int(sub_clusterer[2:])
         cur_events = events[cur]
@@ -800,7 +943,7 @@ def _gmm_hierarchical_predict_and_confidence_check(name, events, clusterers, che
         confident[cur] = _gmm_confidence_check(cur_events, labels[cur], clusterers[sub_clusterer], check_for_variance_dims=check_for_variance_dims).astype(int)
         subtypes[cur] = sub_clusterer
 
-    # Calc prediction for all others, which don't have subcluster
+    # Also check confidence for events, which do not belong to subcluster
     cur = confident == -1
     cur_events = events[cur]
     confident[cur] = _gmm_confidence_check(cur_events, labels[cur], main_clusterer, check_for_variance_dims=check_for_variance_dims).astype(int)
@@ -809,17 +952,20 @@ def _gmm_hierarchical_predict_and_confidence_check(name, events, clusterers, che
     return labels, confident, subtypes
 
 
-class EventbasedCombination(SupervisedDisaggregator):
-    """ This is the final used disaggregator, which bases on the the 
-    combination of the available event based disaggregators. In our case
-    Baranski and Hardt.
 
-    It works a little bit different concerning how results are stored. As 
-    it only disaggregates state machines, it only stores the flanks and all
-    other parts have to be reconstructed by using ffill.
-    That reduces load times significantly. 
-    (This approach makes accumulation in next step also much faster,
-    sothat only the final results have to be in memory.)
+
+class EventbasedCombination(SupervisedDisaggregator):
+    """ This disaggregator is a combination of available event-based disaggregators.
+    First fitting flags are combined and the created events are clustered the like Hart does it.
+    Then the longer segments are created and observed by a clustering of the flags and a subsequent 
+    combination into events. This order has been proposed by Baranski.
+
+    Results are stored in two ways. This is different from the other disaggregating classes. 
+    -   The usual disaggregated store is stored with a resolution of 5 minutes. This is enough to 
+        do further steps like forecasting.
+    -   To evaluate NILM it is also possible to store exact results. In this case, the 
+        additional file only stores the flanks. During read all other values have to be 
+        reconstructed by using interpolate. That reduces load times significantly. 
     """
 
     """ Necessary attributes of any approached meter """
@@ -830,6 +976,7 @@ class EventbasedCombination(SupervisedDisaggregator):
 
     """ The relate my model """
     model_class = EventbasedCombinationDisaggregatorModel
+
 
     def Test_My_NILM(self):
         '''
@@ -894,7 +1041,7 @@ class EventbasedCombination(SupervisedDisaggregator):
         
         # Separate segments
         t1 = time.time()
-        transients = add_segments_improved([transients, steady_states, self.model.params['state_threshold'], self.model.params['noise_level']])
+        transients = add_segments([transients, steady_states, self.model.params['state_threshold'], self.model.params['noise_level']])
         print('Segment separation: ' + str(time.time() - t1))
 
         # Create all events which per definition have to belong together
@@ -921,15 +1068,16 @@ class EventbasedCombination(SupervisedDisaggregator):
 
 
     def train(self, metergroup, output_datastore, exact_nilm_datastore = None, **kwargs):
-        """
-        Trains and immediatly disaggregates
+        """ Trains and immediatly disaggregates
 
         Parameters
         ----------
-        metergroup : a nilmtk.MeterGroup object
-        
-        output_datastore: a nilmtk.Datastore where the disaggregated meters are placed
-        exact_nilm_datastore: If this datastore is given, the NILM Output is also returned as an exact result with full resolution.
+        metergroup: nilmtk.MeterGroup 
+            The metergroup of the buildings main meters
+        output_datastore: nilmtk.Datastore 
+            Storage where the disaggregated meters are stored
+        exact_nilm_datastore: nilmtk.Datastore 
+            If set, the NILM Output is also stored as an exact result with full resolution.
         """
         
         ### Prepare
@@ -1013,7 +1161,7 @@ class EventbasedCombination(SupervisedDisaggregator):
         input_params = []
         for i in range(3):#len(model.transients)):
             input_params.append((self.model.transients[i], self.model.steady_states[i], self.model.params['state_threshold'], self.model.params['noise_level']))
-            self.model.transients[i] = add_segments_improved(input_params[-1])
+            self.model.transients[i] = add_segments(input_params[-1])
         #self.model.transients = pool.map(add_segments_improved, input_params)        
         #plot.plot_segments(self.model.transients[0][:1000], self.model.steady_states[0][:1000])
         print('Segment separation: ' + str(time.time() - t1))
@@ -1079,124 +1227,6 @@ class EventbasedCombination(SupervisedDisaggregator):
         print("Stored: " + str(time.time()-t4))
 
     
-    def separate_simultaneous_events(self, transients, steady_states):
-        '''
-        This function finds the common transients in the list of transients.
-        The equal ones are removed from the timelines and then returned as 
-        a dedicated timeline.
-        '''
-
-
-        # When only one powerflow no simultaneous events
-        if len(transients) <= 1:
-            return
-        new_transients = []   
-        new_steady_states =[]
-        
-        # First look for events over all phases
-        common_transients = pd.concat(transients, join='inner', axis=1)
-        transitions = common_transients['active transition']
-        abc_same_size = transitions.std(axis=1) < 0.1 * transitions.mean(axis=1)
-        if not common_transients.empty and (abc_same_size.sum() / len(common_transients)) > 0.1:
-            raise('There is a three phase appliance, which is not supported yet.')
-                
-        # Find simultaneous events of same size
-        for a, b in [(0,1),(0,2),(1,2)]:
-            common_transients = pd.concat([transients[a], transients[b]], join='inner', axis=1)
-
-            # Find regions where common powersource active (Only oven on multiple lines -> Pattern)
-            to_cluster = (common_transients.index - pd.Timestamp("1.1.2000", tz="UTC")).total_seconds()
-            to_cluster = np.expand_dims(to_cluster.values, 1)
-            dbs = DBSCAN(eps=300, min_samples=5)
-            labels = dbs.fit_predict(to_cluster)
-            common_transients['labels'] = labels
-            grps = common_transients.reset_index()[['starts', 'labels']].groupby('labels')
-            #plot.plot_powerflow_from_events(transients[a][firsts.values[1]:last.values[1]], transients[a].loc[common_transients.index][firsts.values[1]:last.values[1]])
-            
-            # Add the powerflows in between
-            firsts = grps.first()
-            lasts = grps.last()
-            confident_common_transients = [pd.DataFrame(), pd.DataFrame(), pd.DataFrame()]
-            for fst, lst in zip(firsts.values[1:],lasts.values[1:]):
-                # Throw away events at the borders, going to wrong direction
-                #
-                #up = cur['active transition']>0
-                #cur = cur[cur.index[up][0]: cur.index[~up][-1]]
-                # Remove aberations
-                #sum = cur.sum()
-                # When a single reason can be located use it
-                #closest = np.abs(cur['active transient']-sum).argmin()
-                #if (cur['active transient'][closest] - sum) < 0.1 * sum:
-                #    cur.drop(closest, inplace = True)    
-                #    sum = cur.sum()
-                
-                for i in [a,b]:
-                    # Use sections to find elements, which belong together
-                    cur = transients[i][fst:lst]
-                    prev_value = steady_states[i].iloc[transients[i].index.get_loc(fst)-1]
-                    values = np.append(np.array(prev_value[0]), steady_states[i][fst:lst].iloc[:,0])
-                    sections = pd.Series(find_sections((values,  self.model.params['noise_level']))).shift()[1:] # First was added before
-                    invalids = cur.index[(sections == "")]
-                    cur.drop(invalids, inplace = True)
-                    if cur.empty:
-                        continue
-                
-                    # Correct smaller aberations and add new 
-                    sum = cur.sum()['active transition']
-                    cur.loc[cur.index[-1], 'active transition'] -= sum
-                    confident_common_transients[i] = confident_common_transients[i].append(cur) #.add_suffix(str(i))
-
-                    # Adapt the original powerflow sothat removal invisible in real powerflow
-                    steady_states[i].drop(cur.index, inplace = True)
-                    transients[i].drop(cur.index, inplace = True)
-                    transients[i].loc[invalids,'active transition'] = steady_states[i].loc[invalids,'active average'] - steady_states[i].shift(1).loc[invalids,'active average']
-
-                    # Remove from original transitions and steady states
-                    #change_old = pd.Series(index=steady_states[a].index)
-                    #change_old.update(new_states)
-                    #steady_states[i] -= change_old.ffill().fillna(0)
-                    #change_old = pd.Series(index=steady_states[b].index)
-                    #change_old.update(new_states)
-                    #steady_states[b] -= change_old
-                    #transients[a].drop(common_transients.index, inplace = True)
-                    #transients[b].drop(common_transients.index, inplace = True)
-                    
-            # Create the new events 
-            common_transients = pd.concat(confident_common_transients, axis=1)
-            common_transients['active transition'] = common_transients['active transition'].sum(axis=1)
-            signatures = common_transients.loc[:,'signature']
-            common_transients = common_transients.loc[:,~common_transients.columns.duplicated()]
-            up = common_transients['active transition'] > 0
-            common_transients.loc[up,'signature'] = signatures.loc[up,'signature'].fillna(0).applymap(lambda sig: np.max(np.cumsum(sig))).sum(axis=1)
-            common_transients.loc[~up,'signature'] = signatures.loc[~up,'signature'].fillna(0).applymap(lambda sig: np.min(np.cumsum(sig))).sum(axis=1)
-            # Is not used either way...
-            common_transients['ends'] = common_transients.index + pd.Timedelta('4s')
-
-            # Previously I wanted to use a more complex approach
-            #transitions = common_transients['active transition']
-            #same_size = transitions.std(axis=1) < 0.1 * transitions.mean(axis=1)
-            #if (not common_transients.empty) and (same_size.sum() / len(common_transients)) > 0.1:
-            # Combine and remove duplicate column
-            #common_transients[:1]['signature']
-            #siglength = common_transients.iloc[1,:]['signature'].apply(lambda e: len(e)).min()
-            #common_transients['signature'] = common_transients['signature'].applymap(lambda e,l=siglength: e[:l])
-            #common_transients['signature'] = common_transients['signature'].sum(axis=1)
-            #common_transients = common_transients.loc[:,~common_transients.columns.duplicated()]    
-            ## Process signature, sothat only what we need (Muss ich ja schon zusammenrechenen da ich das in der kumulierten Zeitreihe auch brauche)
-            #common_transients.loc[up, 'signature'] = common_transients.loc[up, 'signature'].apply(lambda sig, l=siglength:  np.cumsum(np.array(sig).reshape(-1,l).sum(axis=0)).max())
-            #common_transients.loc[~up, 'signature'] = common_transients.loc[~up, 'signature'].apply(lambda sig, l=siglength:  np.cumsum(np.array(sig).reshape(-1,l).sum(axis=0)).max())                
-                
-            # Create and add the new transients 
-            new_transients.append(common_transients)
-            new_states = pd.DataFrame(common_transients['active transition'].cumsum())
-            new_states.rename(columns={'active transition':'active average'}, inplace = True)
-            new_steady_states.append(new_states)
-
-        # Reset the new results
-        transients.extend(new_transients)
-        steady_states.extend(new_steady_states)        
-        return transients, steady_states
-
  
 
     def _save_metadata_for_disaggregation(self, output_datastore,
@@ -1207,12 +1237,19 @@ class EventbasedCombination(SupervisedDisaggregator):
                                           rest_powerflow_included = False):
         """Add metadata for disaggregated appliance estimates to datastore.
 
+        REMINDER: Also urpruenglich wollte ich das anders machen und eben auch die Metadatan mit abspeichern.
+                  Habe ich aus zeitgruenden dann gelassen und mache es doch so wie es vorher war.
+        
         This method returns nothing.  It sets the metadata
         in `output_datastore`.
 
         Note that `self.MODEL_NAME` needs to be set to a string before
         calling this method.  For example, we use `self.MODEL_NAME = 'CO'`
         for Combinatorial Optimisation.
+
+        TODO:`preprocessing_applied` for all meters
+        TODO: submeter measurement should probably be the mains
+              measurement we used to train on, not the mains measurement.
 
         Parameters
         ----------
@@ -1235,10 +1272,6 @@ class EventbasedCombination(SupervisedDisaggregator):
         num_meters : [int]
             Required if `supervised=False`, Gives for each phase amount of meters
         """
-
-        # TODO: `preprocessing_applied` for all meters
-        # TODO: submeter measurement should probably be the mains
-        #       measurement we used to train on, not the mains measurement.
 
         # DataSet and MeterDevice metadata:
         pq = 3
@@ -1263,8 +1296,6 @@ class EventbasedCombination(SupervisedDisaggregator):
                         'type': 'active' #measurement.levels, #[1][0]
                     }]
                 }
-            
-        # HIER MUSS ICH ICH EBEN AUS DEN MEHREREN TIMEFRAMES UEBER DIE PHASEN DIE AEUSSERE TIMEFRAME BESTIMMEN
         merged_timeframes = merge_timeframes(timeframes, gap=sample_period)
         total_timeframe = TimeFrame(merged_timeframes[0].start,
                                     merged_timeframes[-1].end)
@@ -1278,13 +1309,11 @@ class EventbasedCombination(SupervisedDisaggregator):
         }
         output_datastore.save_metadata('/', dataset_metadata)
         
-        
         # Building metadata
         for i in range(3):
             phase_building = building * 10 + i 
             building_path = '/building{}'.format(phase_building)
             mains_data_location = building_path + '/elec/meter1'
-
 
             # Rest meter:
             elec_meters = {}
@@ -1531,8 +1560,13 @@ class EventbasedCombination(SupervisedDisaggregator):
                 num_clusters = n_clusters
             return (gmm.means_, gmm.covariances_), gmm, gmm.bic
     
+    #endregion
 
 
+
+
+    #region So far unsused 
+    
     def CombiningClustersToFSM():
         params = self.model['params']
         #h = len()
@@ -1542,14 +1576,6 @@ class EventbasedCombination(SupervisedDisaggregator):
         Q = params['gamma1'] * Q1(powers) + params['gamma1'] * Q2(powers) + params['gamma1'] * Q3(powers)
 
 
-    #endregion
-
-
-
-
-
-    #region So far unsused 
-    
     def calc_tolerance(self, value, match_target):
         if (abs(value - match_target)) < self.model.params['large_transition']:
             matchtol = self.model.params['min_tolerance']
@@ -1852,6 +1878,7 @@ class EventbasedCombination(SupervisedDisaggregator):
         #if output_datastore == None:
         #    return disaggregation_overall
 
+
     """
     def export_model(self, filename):
         model_copy = {}
@@ -1872,26 +1899,3 @@ class EventbasedCombination(SupervisedDisaggregator):
                 appliance_name, appliance_instance)
             self.model[appliance_name_instance] = centroids
     """
-
-
-    
-    def _save_metadata_for_disaggregation_new_approach(self, output_datastore, key, ):
-        """
-        Also urpruenglich wollte ich das anders machen und eben auch die Metadatan mit abspeichern.
-        Habe ich aus zeitgruenden dann gelassen und mache es doch so wie es vorher war.
-        
-        Add metadata for disaggregated appliance estimates to datastore.
-        Is a custom version for more sophisticated storing.
-        In the future we should introduce the model as a separate object and than
-        that one can be used and serialized.
-
-        This method returns nothing.  It sets the metadata
-        in `output_datastore`.
-
-        Note that `self.MODEL_NAME` needs to be set to a string before
-        calling this method.  For example, we use `self.MODEL_NAME = 'CO'`
-        for Combinatorial Optimisation.
-        """
-        
-        # Meter0 wird das was auf allen Phasen ist
-        output_datastore.save_metadata(key, self.model.params)

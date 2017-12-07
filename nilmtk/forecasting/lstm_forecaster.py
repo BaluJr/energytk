@@ -60,10 +60,10 @@ class LstmForecasterModel(Sequence):
         'externalFeatures': [('temperature', '')],#, ('national', ''), ('school', '')],#, ('dewpoint', '')], #, 'time'
         
         # How the daytime is regarded
-        'hourFeatures': [('hour', '00-06'), ('hour', "06-09"), ('hour', "09-12"), ('hour', "12-15"), ('hour', "15-18"), ('hour', "18-21"), ('hour', "21-24")],
+        'hour_features': [('hour', '00-06'), ('hour', "06-09"), ('hour', "09-12"), ('hour', "12-15"), ('hour', "15-18"), ('hour', "18-21"), ('hour', "21-24")],
 
         # How the weekdays are paired
-        'weekdayFeatures': [('week', "0-5"),('week', "5-6"),('week',"6-7")],
+        'weekday_features': [('week', "0-5"),('week', "5-6"),('week',"6-7")],
 
         # Unfortunately debug_model not yet working in CNTK 2.2
         'debug' : False,
@@ -73,7 +73,11 @@ class LstmForecasterModel(Sequence):
 
         # Define output
         'training_progress_output_freq': 40,
+
+        # Forecasting without external data
+        'forecast_without_external': False
     }
+
     
     def __init__(self, **args):
         '''
@@ -88,8 +92,10 @@ class LstmForecasterModel(Sequence):
              'plotdata': {"batchnumber":[], "loss":[], "error":[], "avg_power":[]}
             }] * len(self.params['models'])
     
+
     def set_model(self, i, element, new_model):
         self.model[i] = new_model
+
 
     def __getitem__(self, i):
         '''
@@ -98,8 +104,10 @@ class LstmForecasterModel(Sequence):
         '''
         return self.model[i]
 
+
     def __len__(self):
         return self.model.__len__()
+
 
     def plot_training_progress(self, mean = False):
         ''' 
@@ -129,12 +137,17 @@ class LstmForecasterModel(Sequence):
         plt.show()
 
 
+
 class LstmForecaster(Forecaster):
-    """This is a forecaster based on a distinct artificial neural network (ANN) 
+    """ Forecaster using a single lstm. The future values are not incorporated.
+
+    This is a forecaster based on a distinct artificial neural network (ANN) 
     for each of the the forecasting distances.
+
+    Attributes
     ----------
-    model_class : The model type, which belonging to the forecaster.
-    
+    model_class: type  
+        The model type, which belonging to the forecaster.
     """
     
     # The related model
@@ -145,24 +158,31 @@ class LstmForecaster(Forecaster):
         """
         Constructor of this class which takes an optional model as input.
         If no model is given, it creates a default one.
+
+        Paramters
+        ---------
+        model: Model of type model_class
+            The model which shall be used.
         """
         super(LstmForecaster, self).__init__(model)
 
         
-    def mape(self, z, l):
-        return C.reduce_mean(C.abs(z - l)/l) 
+   
     
-    def mae(self, z, l):
-        return C.reduce_mean(C.abs(z - l))
-
     def _model_creation(self, modelnumber):
-        """
-        Create the model for time series prediction
-        """
+        """ Create the model for time series prediction.
+        Since there are multiple models, the parameter defines 
+        the number of the model.
 
+        Parameters
+        ----------
+        modelnumber: int
+            Forecasting horizon this model is trained for.
+        """
+        
         # Define input
         params = self.model.params
-        input_dim = 1 + len(params['externalFeatures']) + len(params['hourFeatures']) + len(params['weekdayFeatures'])
+        input_dim = 1 + len(params['externalFeatures']) + len(params['hour_features']) + len(params['weekday_features'])
         self.model[modelnumber]['input'] = x = C.sequence.input_variable(shape=input_dim, is_sparse = False)     # Das fuegt glaube sofort schon eine Dyn Achse ein
 
         # Create the network
@@ -190,7 +210,17 @@ class LstmForecaster(Forecaster):
         '''
         Does the training of the neural network. Each load chunk is translated into 
         multiple minibatches used for training the network.
+        
+        Parameters
+        ----------
+        meters: nilmtk.DataSet
+            The meters from which the demand is loaded.
+        extDataSet: nilmtk.DataSet
+            The External Dataset containing the fitting data.
+        verbose: bool
+            Whether additional output shall be printed during training.
         '''
+
         params = self.model.params
         
         # A) Load the data
@@ -202,7 +232,7 @@ class LstmForecaster(Forecaster):
         
         # B) Prepare the data
         shifts = list(range(params['horizon'], 0, -1))
-        chunk = self._addTimeRelatedFeatures(chunk, params['weekdayFeatures'], params['hourFeatures'])
+        chunk = self._addTimeRelatedFeatures(chunk, params['weekday_features'], params['hour_features'])
         chunk = self._addExternalData(chunk, extDataSet, section, self.model.params['externalFeatures'])
         #chunk = self._addShiftsToChunkAndReduceToValid(chunk, shifts, params['models'])
         
@@ -272,8 +302,13 @@ class LstmForecaster(Forecaster):
 
         Paramters:
         -------------
-        meters:     The meter group to predict
-        timestamp:  The point in time from which the prognoses is performed.
+        
+        Parameters
+        ----------
+        meters: nilmtk.DataSet
+            The meters from which the demand is loaded.
+        timestamp: [pd.TimeStamp,...] or pd.DatetimeIndex
+            The point in time from which the prognoses is performed.
         '''
 
        # Predict
@@ -292,10 +327,30 @@ class LstmForecaster(Forecaster):
 
                     
     def _track_training_progress(self, modelnumber, horizon, mb, features, labels, testing_indices, verbose = False):
+        ''' Writes training progress into the buffer.
+        Calculates the error per minibatch and outputs the error with a given frequency.
+
+        Parameters
+        ----------
+        modelnumber: int
+            The model, which shall be used for the forecast
+        horizon: int
+            The horizon, the model is forecasting for.
+        mb: int
+            The number of the minibatch
+        ann_features: 
+            The input features for the ann_input
+        lstm_features:
+            The input features for the lstm_input
+        labels: 
+            The real output taken from the ground_truth
+        testing_indices: [int,...]
+            All indices in the main data, reserved for testing. 
+            Elements of these indices are not used for training.
+        verbose: bool
+            Whether to print additional output
         '''
-        Calculates the error per minibatch. 
-        Outputs the error with a given frequency.
-        '''
+
         selection = np.random.choice(testing_indices, 10)
         cur_input = []
         for item in selection:
@@ -314,25 +369,3 @@ class LstmForecaster(Forecaster):
         model['plotdata']["avg_power"].append(avg_power)
         if verbose: 
             print ("Minibatch: {0}, Loss: {1:.4f}, Error: {2:.2f}, AvgPower: {3}".format(mb, training_loss, eval_error, avg_power))
-        
-      
-
-
-            
-    #def _addShiftsToChunkAndReduceToValid(self, chunk):
-    #    '''
-    #    This function takes the current chunk of the meter and adapts it sothat
-    #    it can be used for training. That means it extends the dataframe by the 
-    #    missing features we want to learn.
-    #    '''        
-    #    # Determine the shifts that are required. All in memory since only a few values
-    #    all_shifts = set()
-    #    for shift in range(self.model.params['horizon'], 0, -1):
-    #        all_shifts.update(range(shift, shift+self.model.params['models']))
-
-    #    # Compute the stock being up (1) or down (0) over different day offsets compared to current dat closing price
-    #    for i in all_shifts:
-    #        chunk[('shifts', str(i))] = chunk[('power','active')].shift(i)    # i: number of look back days
-
-    #    chunk.drop(chunk.index[chunk[('shifts',str(max(all_shifts)))].isnull()], inplace=True)
-          

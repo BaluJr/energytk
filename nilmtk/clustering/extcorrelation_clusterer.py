@@ -14,11 +14,21 @@ from .clusterer import Clusterer
 from nilmtk import DataSet, ExternDataSet
 import time
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
-
-
 import pickle as pckl
 
 class ExtCorrelationClustererModel(object):
+    ''' The model belonging to the external correlation clusterer
+
+    Attributes
+    ----------
+    correlations: pd.DataFrame
+        This is the resulting dataframe with the relations between all meters to all external features
+    centroids: [np.ndarray]
+        The centroids after doing the clustering
+    assignments: [int,...]
+        The assignments after doing the clustering
+    '''
+
     params = {
         # The external, which is used to create the vectors for each element, DataSet
         'ext_data_dataset': "C:\\Users\\maxim_000\\Documents\\InformatikStudium_ETH\\Masterarbeit\\6_Data\\Tmp\\ExtData.hdf",
@@ -50,15 +60,6 @@ class ExtCorrelationClustererModel(object):
         'verbose': True
     }
 
-    # This is the resulting dataframe with the relations between all meters to all external features
-    correlations = None
-
-    # The centroids after doing the clustering
-    centroids = None
-    
-    # The assignments after doing the clustering
-    assignments = None
-
 
 
 class ExtCorrelationClusterer(Clusterer):
@@ -68,16 +69,22 @@ class ExtCorrelationClusterer(Clusterer):
     After training, this model contains a vector for each meter.
     Take care, that every element might have separate data to be benchmarked against.
 
-    Ich gehe von niedrigerer Aufloesung aus und dass es in den Speicher passt.
+    Everything is done inmemory to make it fit into the memory.
     """
     model_class = ExtCorrelationClustererModel
 
     def __init__(self, model = None):
         """
         Constructor of this class which takes an optional model as input.
-        If no model is given, it createsa default one.
+        If no model is given, it creates a default one.
+
+        Paramters
+        ---------
+        model: Model of type model_class
+            The model which shall be used.
         """
         super(ExtCorrelationClusterer, self).__init__(model)
+
 
     def set_up_corrdataframe(self, dim, weekdays, dayhours):
         '''
@@ -100,7 +107,6 @@ class ExtCorrelationClusterer(Clusterer):
         def tst2(current_loadseries, days_of_group):
             t = current_loadseries[:-1].index.weekday.apply(lambda e, dog=days_of_group: e in dog)
             
-
         # Add the time related features
         global corrdataframe
         corrdataframe = group_data[dim]
@@ -126,10 +132,12 @@ class ExtCorrelationClusterer(Clusterer):
         accellerate the process.
         Each process only gets the location of its target timeline as 
         an input. It then only takes the data from the global element.
+
+        Returns
+        -------
+        correlations: pd.DataFrame
+            The dataframe of the model.
         '''
-        #if isinstance(input, int):
-        #    shift = input
-        #    return current_loadseries.autocorr(shift)
 
         correlations = corrdataframe.apply(lambda col, method = self.model.params['method']: col.corr(current_loadseries, method=method), axis=0)
         return correlations.fillna(0)
@@ -137,8 +145,9 @@ class ExtCorrelationClusterer(Clusterer):
         
 
 
-    def cluster(self, meters, extDataSet, targetFile, n_jobs = -1):
-        '''
+    def cluster(self, meters, extDataSet, target_file, n_jobs = -1):
+        ''' The main clustering function.
+
         Do it in a parallelized way to accellerate it. 
         Take care that only households below a maximum consumption of 32kw are 
         supported as we use 16bit integers.
@@ -146,7 +155,15 @@ class ExtCorrelationClusterer(Clusterer):
         way: One thread is loading. One is doing the correlation. One is storing.
         
         Parameters:
-        meters: The meters which shall be clustered
+        meters: nilmtk.DataSet
+            The meters to cluster, from which the demand is loaded.
+        extDataSet: nilmtk.DataSet
+            The External Dataset containing the fitting data.
+        target_file: string
+            Path to the file where the cluster results shall be stored.
+        n_jobs: int
+            ! Not used at the moment !
+            Defines the amount of processes. (-1 = amount of cpu cores)
         '''
 
         # We need global variables if we want to use multiprocessing
@@ -192,9 +209,7 @@ class ExtCorrelationClusterer(Clusterer):
                     #    resampledload = current_loadseries.combine_first(newSeries)
                     #    resampledload = resampledload.interpolate()
                     #    current_loadseries = resampledload.resample('2min', how='mean')
-                    
                
-
                     #pool = multiprocessing.Pool(processes=n_jobs)
                     #corr_vector = pool.map(correlate, dims)
 
@@ -219,7 +234,7 @@ class ExtCorrelationClusterer(Clusterer):
         to_list = lambda x: list(x)
         result = corrs.reset_index().groupby('cluster').agg({'index':to_list})
         result.rename(columns={'index': 'elecmeters'})
-        result.to_csv(targetFile) # return result['index'] 
+        result.to_csv(target_file) # return result['index'] 
         return result
 
 
@@ -229,14 +244,18 @@ class ExtCorrelationClusterer(Clusterer):
 
         Parameters
         ----------
-        events : pd.DataFrame with the dimensions as columns
+        correlation_dataframe: pd.DataFrame 
+            The dataframe to cluster
         max_num_clusters : int
-        method: string Possible approaches are "kmeans" and "ward"
+            Amount of clusters for which k-means is performed and of 
+            which the best (BIC) is taken.
+        method: string ("kmeans" and "ward")
+            Used approach to do the forecasting.
+        
         Returns
         -------
         centroids : ndarray of int32s
-            The correlation values which belong together
-            
+            The correlation values which belong together    
         labels: ndarray of int32s
             The assignment of each vector to the clusters
         '''
@@ -285,18 +304,31 @@ class ExtCorrelationClusterer(Clusterer):
                     return k_means_cluster_centers[num_clusters]
                 else:
                     return np.array([0])
-        centers = scaler.inverse_transform(k_means_cluster_centers[num_clusters])
-        return centers.flatten(), k_means_labels[num_clusters]
+        centroids = scaler.inverse_transform(k_means_cluster_centers[num_clusters])
+        return centroids.flatten(), k_means_labels[num_clusters]
 
     
 
     def _apply_clustering_n_clusters(self, X, n_clusters, method='kmeans'):
-        """
-        :param X: ndarray
-        :param n_clusters: exact number of clusters to use
-        :param method: string kmeans or ward
-        :return:
-        """
+        ''' Do the clustering.
+        Currently only kmeans is supported. Can be easily replaced.
+        
+        Parameters
+        ----------
+        X: ndarray
+            Array to cluster
+        n_clusters: int
+            Exact number of clusters to use
+        method: string 
+            Currenty only kmeans is supported
+
+        Returns
+        -------
+        centroids : n_cluster * (ndarray of int32s)
+            The correlation values which belong together    
+        labels: n_cluster * (ndarray of int32s)
+            The assignment of each vector to the clusters
+        '''
         if method == 'kmeans':
             k_means = KMeans(init='k-means++', n_clusters=n_clusters)
             k_means.fit(X)
