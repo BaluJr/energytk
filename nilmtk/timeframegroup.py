@@ -81,7 +81,12 @@ class TimeFrameGroup():
         Returns:
             timeframe: outer timeframe of this TimeFrameGroup
         '''
-        return TimeFrame(start = self._df.iloc[0, 'section_start'], end = self._df.iloc[0, 'section_end'])
+
+        if self._df.empty:
+            return TimeFrame(start = None, end = None)
+
+        idx = self._df.index
+        return TimeFrame(start = self._df.loc[idx[0], 'section_start'], end = self._df.loc[idx[-1], 'section_end'])
 
 
     def union(self, other):
@@ -278,13 +283,13 @@ class TimeFrameGroup():
         simplified: nilmtk.TimeFrameGroup
             A timeframegroup with the targeted segments removed.
         """
-        if self._df.empty:
-            return TimeFrameGroup()
+        if len(self._df) < 2:
+            return TimeFrameGroup(self._df.copy())
 
         if isinstance(threshold, str):
             threshold = pd.Timedelta(threshold)
 
-        gap_larger = ((self._df["section_start"].shift(-1) - self._df["section_end"]) > threshold)
+        gap_larger = ((self._df["section_start"].shift(-1).ffill() - self._df["section_end"]) > threshold)
         gap_larger.iloc[-1] = True # keep last
         relevant_starts = self._df[["section_start"]][gap_larger.shift(1).fillna(True)].reset_index(drop=True)
         relevant_ends = self._df[["section_end"]][gap_larger].reset_index(drop=True)

@@ -3,10 +3,8 @@ from collections import OrderedDict, deque
 import time
 from datetime import datetime
 from nilmtk import plot
-from nilmtk.feature_detectors.cluster import hart85_means_shift_cluster
-from nilmtk.feature_detectors.steady_states import find_steady_states_transients
 from nilmtk.disaggregate.accelerators import find_steady_states_fast, find_transients_baranskistyle_fast, find_transients_fast, pair_fast, find_sections, myresample_fast, myviterbi_numpy_fast
-from nilmtk.timeframe import merge_timeframes, TimeFrame
+from nilmtk import TimeFrame, TimeFrameGroup
 from nilmtk.disaggregate import SupervisedDisaggregator, UnsupervisedDisaggregatorModel
 import numpy as np
 import pandas as pd
@@ -17,7 +15,6 @@ from collections import Counter
 from sklearn_pandas import DataFrameMapper  
 import pickle as pckl
 from sklearn.metrics import silhouette_score
-from mpl_toolkits.mplot3d import Axes3D
 from sklearn import mixture
 import matplotlib as mpl
 from scipy import linalg, spatial
@@ -192,7 +189,10 @@ def fast_groupby(df):
     keys, values = values[:,0], values[:,1:]
     ukeys,index=np.unique(keys, return_index = True) 
     result = []
-    
+
+    if len(df) < 4:
+        raise Exception("Broken")
+
     # Twoevents
     if (index[1] - index[0]) == 2:
         for arr in np.vsplit(values,index[1:]):
@@ -361,7 +361,7 @@ def remove_inconfident_elements(transients):
 
 
 
-def separate_simultaneous_events(self, transients, steady_states, noise_level):
+def separate_simultaneous_events(transients, steady_states, noise_level):
     '''
     This function finds the common transients in the list of transients.
     The equal ones are removed from the timelines and then returned as 
@@ -404,6 +404,11 @@ def separate_simultaneous_events(self, transients, steady_states, noise_level):
     # Find simultaneous events between the pairs of phases
     for a, b in [(0,1),(0,2),(1,2)]:
         common_transients = pd.concat([transients[a], transients[b]], join='inner', axis=1)
+        common_transients = \
+            common_transients[common_transients["active transition"].abs().sum(axis=1)
+                              == common_transients["active transition"].sum(axis=1).abs()]
+        if len(common_transients) < 10:
+            continue
 
         # Find regions where common powersource active (Only oven on multiple lines -> Pattern)
         to_cluster = (common_transients.index - pd.Timestamp("1.1.2000", tz="UTC")).total_seconds()
@@ -417,6 +422,7 @@ def separate_simultaneous_events(self, transients, steady_states, noise_level):
         firsts = grps.first()
         lasts = grps.last()
         confident_common_transients = [pd.DataFrame(), pd.DataFrame(), pd.DataFrame()]
+        # The -1 Group is removed by starting from second index
         for fst, lst in zip(firsts.values[1:],lasts.values[1:]):
             for i in [a,b]:
                 # Use sections to find elements, which belong together
@@ -441,6 +447,9 @@ def separate_simultaneous_events(self, transients, steady_states, noise_level):
                     
         # Create the new events 
         common_transients = pd.concat(confident_common_transients, axis=1)
+        if len(common_transients) == 0:
+            continue
+
         common_transients['active transition'] = common_transients['active transition'].sum(axis=1)
         signatures = common_transients.loc[:,'signature']
         common_transients = common_transients.loc[:,~common_transients.columns.duplicated()]
@@ -486,14 +495,15 @@ def find_appliances(params):
         Dictionary which contains for each subtype the corresponding GaussianMixture
         used during clustering.
     '''
-
     transients, state_threshold = params
     clusterers = {}
     
     # Separate the two-flag events 
     twoevents = transients[transients['segmentsize'] == 2]
     twoevents = fast_groupby(twoevents)
-    new_clusterers, subtypes, labels, confidences = _gmm_clustering_hierarchical(twoevents, "2", max_num_clusters = [6, 4], dim_scaling = {'transition_avg':3}, check_for_variance_dims=['transition_avg'], single_only=True)
+    new_clusterers, subtypes, labels, confidences = \
+        _gmm_clustering_hierarchical(twoevents, "2", max_num_clusters = [6, 4], dim_scaling = {'transition_avg':3},
+                                     check_for_variance_dims=['transition_avg'], single_only=False)
     clusterers = {**clusterers, **new_clusterers}
     twoevents['confident'] = confidences
     twoevents['appliance'] = labels
@@ -513,7 +523,9 @@ def find_appliances(params):
     for type in range(2):
         name = "3_" + str(type)
         cur_threeevents = threeevents[threeevents['subtype'] == type].drop(columns=['subtype', 'appliance', 'confident'])
-        new_clusterers, subtypes, labels, confidences = _gmm_clustering_hierarchical(cur_threeevents, name ,max_num_clusters = 10, check_for_variance_dims=['fst', 'sec', 'trd'], single_only=True)
+        new_clusterers, subtypes, labels, confidences = \
+            _gmm_clustering_hierarchical(cur_threeevents, name ,max_num_clusters = 10,
+                                         check_for_variance_dims=['fst', 'sec', 'trd'], single_only=True)
         clusterers = {**clusterers, **new_clusterers}
         threeevents.loc[threeevents['subtype'] == type, 'confident'] = confidences
         threeevents.loc[threeevents['subtype'] == type, 'appliance'] = labels
@@ -573,7 +585,9 @@ def find_appliances(params):
     for type in range(4):
         name = "4_" + str(type)
         events_to_cluster = rest_fourevents[rest_fourevents['subtype'] == type].dropna(axis=1)
-        new_clusterers, subtypes, labels, confidences = _gmm_clustering_hierarchical(events_to_cluster, name, max_num_clusters = 10, single_only=True)
+        new_clusterers, subtypes, labels, confidences = \
+            _gmm_clustering_hierarchical(events_to_cluster, name, max_num_clusters = 10,
+                                         check_for_variance_dims=['fst', 'sec', 'trd', "fth"], single_only=True)
         clusterers = {**clusterers, **new_clusterers}
         rest_fourevents.loc[rest_fourevents['subtype'] == type, 'confident'] = confidences
         rest_fourevents.loc[rest_fourevents['subtype'] == type, 'appliance'] = labels
@@ -713,7 +727,7 @@ def _gmm_clustering(events, max_num_clusters=5, exact_cluster=None, dim_scaling 
     '''
     
     # Special case:
-    if len(events) < len(events.columns): 
+    if len(events) < 20: # len(events.columns):
         return None, (np.ones(len(events))*-1)
 
     # Preprocess dataframe
@@ -783,14 +797,17 @@ def _gmm_confidence_check(X, prediction, clusterer, check_for_variance_dims, ret
     '''
 
     if (prediction == -1).all():
-        return np.zeros(len(X)).astype(bool)
+        if return_subclustering_recommendation:
+            return np.zeros(len(X)).astype(bool), np.zeros(len(X)).astype(bool)
+        else:
+            return np.zeros(len(X)).astype(bool)
 
     subcluster_recommendations = []
     confident = np.zeros(X.shape[0]).astype(bool)
     unique, counts = np.unique(prediction, return_counts=True)
     avg_clustersize = np.mean(counts)
     counts = dict(zip(unique, counts))
-    for i, (mean, covar, color) in enumerate(zip(clusterer.means_, clusterer.covariances_, color_iter)):
+    for i, (mean, covar) in enumerate(zip(clusterer.means_, clusterer.covariances_)):
 
         # 1. Exclude clusters with too high stddev
         indices = np.where(np.in1d(X.columns, check_for_variance_dims))[0]
@@ -813,7 +830,8 @@ def _gmm_confidence_check(X, prediction, clusterer, check_for_variance_dims, ret
         confident[cur] = probas.max(axis=1) > 0.9
         
         # 4. If not 90% sure, take at least the ones inside the one sigma environment
-        confident[cur] |= (spatial.distance.cdist(cur_X, np.expand_dims(mean, 0), 'mahalanobis', VI=linalg.inv(covar)) < 1).squeeze()
+        confident[cur] |= \
+            (spatial.distance.cdist(cur_X, np.expand_dims(mean, 0), 'mahalanobis', VI=linalg.inv(covar)) < 1).squeeze()
 
     if return_subclustering_recommendation:
         return confident.astype(bool), subcluster_recommendations
@@ -877,16 +895,22 @@ def _gmm_clustering_hierarchical(events, name, max_num_clusters=[5,5], check_for
     clusterers = {name: clusterer}
 
     # Check confidence
-    confidence, subclustering = _gmm_confidence_check(events, labels, clusterer, check_for_variance_dims=check_for_variance_dims[0], return_subclustering_recommendation=True)
+    confidence, subclustering = \
+        _gmm_confidence_check(events, labels, clusterer, check_for_variance_dims=check_for_variance_dims[0],
+                              return_subclustering_recommendation=True)
     
     # Second round of clustering if not removed
-    if not single_only:
+    if single_only:
         for mastercluster in subclustering:
             sub_name = name + "_" + str(mastercluster)
             cur_cluster = (labels == mastercluster)
             to_subcluster = events[cur_cluster]
-            sub_clusterer, sub_labels = _gmm_clustering(to_subcluster, max_num_clusters=max_num_clusters[1], dim_scaling=dim_scaling[1], dim_emph=dim_emph[1])
-            sub_confidence = _gmm_confidence_check(to_subcluster, sub_labels, sub_clusterer, check_for_variance_dims=check_for_variance_dims[1])
+            sub_clusterer, sub_labels = \
+                _gmm_clustering(to_subcluster, max_num_clusters=max_num_clusters[1],
+                                dim_scaling=dim_scaling[1], dim_emph=dim_emph[1])
+            sub_confidence = \
+                _gmm_confidence_check(to_subcluster, sub_labels, sub_clusterer,
+                                      check_for_variance_dims=check_for_variance_dims[1])
             labels[cur_cluster] = sub_labels
             confidence[cur_cluster] = sub_confidence
             subtypes[cur_cluster] = sub_name
@@ -1067,7 +1091,7 @@ class EventbasedCombination(SupervisedDisaggregator):
         super(EventbasedCombination, self).__init__()
 
 
-    def train(self, metergroup, output_datastore, exact_nilm_datastore = None, **kwargs):
+    def train(self, metergroup, output_datastore, exact_nilm_datastore = None, tmp_folder = None, **kwargs):
         """ Trains and immediatly disaggregates
 
         Parameters
@@ -1078,13 +1102,16 @@ class EventbasedCombination(SupervisedDisaggregator):
             Storage where the disaggregated meters are stored
         exact_nilm_datastore: nilmtk.Datastore 
             If set, the NILM Output is also stored as an exact result with full resolution.
+        tmp_folder: str
+            Path to a folder where intermediate results shall be stored.
+            It let none, no intermediate results are stored
         """
-        
+
         ### Prepare
         kwargs = self._pre_disaggregation_checks(metergroup, kwargs)
-        kwargs.setdefault('sections', metergroup.good_sections().merge_shorter_gaps_than('10min'))#.drop_all_but(3))
+        kwargs.setdefault('sections', metergroup.good_sections().merge_shorter_gaps_than('10min'))
         pool = Pool(processes=3)
-        metergroup = metergroup.sitemeters() # Only the main elements are interesting
+        metergroup = metergroup.sitemeters()
         model = self.model        
         model.steady_states = []
         model.transients = []
@@ -1093,76 +1120,69 @@ class EventbasedCombination(SupervisedDisaggregator):
         model.clusterer = [{}] * len(metergroup)
         model.overall_powerflow = overall_powerflow = [] 
                 
-        ### 1. Load the events from the poweflow data
-        #print('Extract events')
-        #t1 = time.time()
-        #loader = []
-        #steady_states_list = []
-        #transients_list = []   
-        #try:
-        #    self.model = model = pckl.load(open('E:disaggregation_events/' + str(metergroup.identifier) + '.pckl', 'rb'))
-        #    model.appliances = []
-        #except:
-        #    for i in range(len(metergroup)):
-        #        overall_powerflow.append(None)
-        #        steady_states_list.append([])
-        #        transients_list.append([])
-        #        loader.append(metergroup.meters[i].load(cols=self.model.params['cols'], chunksize = 31000000, **kwargs))
-        #    try:
-        #        while(True):
-        #            input_params = []
-        #            for i in range(len(metergroup)):
-        #                power_dataframe = next(loader[i]).dropna()
-        #                if overall_powerflow[i] is None:
-        #                    overall_powerflow[i] = power_dataframe.resample('5min').agg('mean')  
-        #                else:
-        #                    overall_powerflow[i] = overall_powerflow[i].append(power_dataframe.resample('5min', how='mean'))
-        #                indices = np.array(power_dataframe.index)
-        #                values = np.array(power_dataframe.iloc[:,0])
-        #                input_params.append((indices, values, model.params['min_n_samples'], model.params['state_threshold'], model.params['noise_level']))
-        #            #states_and_transients, tst_original_fast, tst_original  = [], [], []
-        #            #for i in range(2,len(metergroup)):
-        #            #    states, transients = find_transients_fast(input_params[i])
-        #            #    steady_states_list[i].append(states)
-        #            #    transients_list[i].append(transients)
-        #            states_and_transients = pool.map(find_transients_fast, input_params)
-        #            for i in range(len(metergroup)):
-        #                steady_states_list[i].append(states_and_transients[i][0])
-        #                transients_list[i].append(states_and_transients[i][1])
+        ## 1. Load the events from the powerflow data
+        print('Extract events')
+        t1 = time.time()
+        loader, steady_states_list, transients_list = [], [], []
+        try:
+           self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '.pckl', 'rb'))
+           model.appliances = []
+        except:
+           for i in range(len(metergroup)):
+               overall_powerflow.append(None)
+               steady_states_list.append([])
+               transients_list.append([])
+               loader.append(metergroup.meters[i].load(cols=self.model.params['cols'], chunksize = 31000000, **kwargs))
+           try:
+               while(True):
+                   input_params = []
+                   for i in range(len(metergroup)):
+                       power_dataframe = next(loader[i]).dropna()
+                       if overall_powerflow[i] is None:
+                           overall_powerflow[i] = power_dataframe.resample('5min').agg('mean')
+                       else:
+                           overall_powerflow[i] = \
+                               overall_powerflow[i].append(power_dataframe.resample('5min', how='mean'))
+                       indices = np.array(power_dataframe.index)
+                       values = np.array(power_dataframe.iloc[:,0])
+                       input_params.append((indices, values, model.params['min_n_samples'],
+                                            model.params['state_threshold'], model.params['noise_level']))
+                   states_and_transients = pool.map(find_transients_fast, input_params)
+                   for i in range(len(metergroup)):
+                       steady_states_list[i].append(states_and_transients[i][0])
+                       transients_list[i].append(states_and_transients[i][1])
+           except StopIteration:
+               pass
+           # set model (timezone is lost within c programming)
+           for i in range(len(metergroup)):
+               model.steady_states.append(pd.concat(steady_states_list[i]).tz_localize('utc'))
+               model.transients.append(pd.concat(transients_list[i]).tz_localize('utc'))
+               model.transients[-1].index.rename("starts", inplace = True)
+           if not tmp_folder is None:
+               pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '.pckl', 'wb'))
+        print("Eventloading: " + str(time.time()-t1))
 
-        #    except StopIteration:
-        #        pass
-        #    # set model (timezone is lost within c programming)
-        #    for i in range(len(metergroup)):
-        #        model.steady_states.append(pd.concat(steady_states_list[i]).tz_localize('utc'))
-        #        model.transients.append(pd.concat(transients_list[i]).tz_localize('utc')) #pd.merge(self.steady_states[0], self.steady_states[1], how='inner', suffixes=['_1', '_2'], indicator=True, left_index =True, right_index =True)
-        #        model.transients[-1].index.rename("starts", inplace = True)
-        #    pckl.dump(model, open('E:disaggregation_events/' + str(metergroup.identifier) + '.pckl', 'wb'))
-        #t2 = time.time()
-        #print("Eventloading: " + str(t2-t1))
 
-        ### 2. Create separate powerflows with events, shared by multiple phases
-        #t1 = time.time()
-        #model.transients, model.steady_states = self.separate_simultaneous_events(self.model.transients, self.model.steady_states)
-        #pckl.dump(model, open('E:disaggregation_events/' + str(metergroup.identifier) + '_phases_separated.pckl', 'wb'))
-        #print('Shared phase separation: ' + str(time.time() - t1))
+        ## 2. Create separate powerflows with events, shared by multiple phases
+        t1 = time.time()
+        model.transients, model.steady_states = \
+            separate_simultaneous_events(model.transients, model.steady_states, model.params['noise_level'])
+        if not tmp_folder is None:
+            pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'wb'))
+        print('Shared phase separation: ' + str(time.time() - t1))
 
-        ### Accelerate for testing
-        ##for i in range(len(model.transients)):
-        ##    self.model.transients[i] = self.model.transients[i][:len(self.model.transients[i])] # 3000
-        ##    self.model.steady_states[i] = self.model.steady_states[i][:len(self.model.steady_states[i])] # 3000
-        ##    self.model.overall_powerflow[i] = self.model.overall_powerflow[i][:self.model.steady_states[i].index[-1] + pd.Timedelta('5min')] # 80000
 
         ## 3. Separate segments between base load        
-        self.model = model = pckl.load(open('E:disaggregation_events/' + str(metergroup.identifier) + '_phases_separated.pckl', 'rb'))
-        for i in range(3,6):
-            model.steady_states[i] = pd.DataFrame(model.steady_states[i]).rename(columns={'active transition':'active average'})
+        #self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'rb'))
+        #for i in range(3,6):
+        #    model.steady_states[i] = pd.DataFrame(model.steady_states[i]).rename(columns={'active transition':'active average'})
         t1 = time.time()
         input_params = []
         for i in range(3):#len(model.transients)):
-            input_params.append((self.model.transients[i], self.model.steady_states[i], self.model.params['state_threshold'], self.model.params['noise_level']))
-            self.model.transients[i] = add_segments(input_params[-1])
-        #self.model.transients = pool.map(add_segments_improved, input_params)        
+            input_params.append((self.model.transients[i], self.model.steady_states[i],
+                                 self.model.params['state_threshold'], self.model.params['noise_level']))
+            #self.model.transients[i] = add_segments(input_params[-1])
+        self.model.transients = pool.map(add_segments, input_params)
         #plot.plot_segments(self.model.transients[0][:1000], self.model.steady_states[0][:1000])
         print('Segment separation: ' + str(time.time() - t1))
         
@@ -1173,17 +1193,18 @@ class EventbasedCombination(SupervisedDisaggregator):
         input_params = []
         for i in range(3):#len(model.transients)):
             input_params.append((model.transients[i], self.model.params['state_threshold']))
-            result.append(find_appliances(input_params[-1]))
-        #result = pool.map(find_appliances, input_params)
+            #result.append(find_appliances(input_params[-1]))
+        result = pool.map(find_appliances, input_params)
         for i in range(3):#len(model.transients)):
             model.transients[i] = result[i]['transients']
             model.clusterer[i] = result[i]['clusterer']
         print("Find appliances: " + str(time.time() - t2))
-        pckl.dump(model, open('E:disaggregation_events/' + str(metergroup.identifier) + '_appfound_separated.pckl', 'wb'))
+        if not tmp_folder is None:
+            pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appfound_separated.pckl', 'wb'))
 
 
         # 5. Create the appliances (Pay attention, id per size and subtype) and rest powerflow
-        self.model = model = pckl.load(open('E:disaggregation_events/' + str(metergroup.identifier) + '_appfound_separated.pckl', 'rb')); model.appliances_detailed = []
+        #self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appfound_separated.pckl', 'rb')); model.appliances_detailed = []
         t3 = time.time()
         input_params, results = [], []
         for i in range(3):#len(model.transients)):
@@ -1196,10 +1217,11 @@ class EventbasedCombination(SupervisedDisaggregator):
             if exact_nilm_datastore:
                 model.appliances_detailed.append(results[i]['exact_nilm'])
         print("Put together appliance powerflows: " + str(time.time() - t3))
-        pckl.dump(model, open('E:disaggregation_events/' + str(metergroup.identifier) + '_appcreated_separated.pckl', 'wb'))
+        if not tmp_folder is None:
+            pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appcreated_separated.pckl', 'wb'))
 
         # 5. Store the results (Not in parallel since writing to same file)
-        self.model = model = pckl.load(open('E:disaggregation_events/' + str(metergroup.identifier) + '_appcreated_separated.pckl', 'rb'))
+        #self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appcreated_separated.pckl', 'rb'))
         print('Store')
         t4 = time.time()
         for phase in range(len(model.transients)):
@@ -1229,19 +1251,16 @@ class EventbasedCombination(SupervisedDisaggregator):
     
  
 
-    def _save_metadata_for_disaggregation(self, output_datastore,
-                                          sample_period, measurement,
-                                          timeframes, building,
-                                          meters=None, num_meters=None,
-                                          supervised=True, original_building_meta = None, 
-                                          rest_powerflow_included = False):
+    def _save_metadata_for_disaggregation(self, output_datastore, sample_period, measurement, timeframes,
+                                          building,meters=None, num_meters=None, supervised=True,
+                                          original_building_meta = None, rest_powerflow_included = False):
         """Add metadata for disaggregated appliance estimates to datastore.
 
         REMINDER: Also urpruenglich wollte ich das anders machen und eben auch die Metadatan mit abspeichern.
                   Habe ich aus zeitgruenden dann gelassen und mache es doch so wie es vorher war.
         
-        This method returns nothing.  It sets the metadata
-        in `output_datastore`.
+        This function first checks whether there are already metainformation in the file.
+        If zes, it extends them and otherwise it removes them.
 
         Note that `self.MODEL_NAME` needs to be set to a string before
         calling this method.  For example, we use `self.MODEL_NAME = 'CO'`
@@ -1273,43 +1292,54 @@ class EventbasedCombination(SupervisedDisaggregator):
             Required if `supervised=False`, Gives for each phase amount of meters
         """
 
-        # DataSet and MeterDevice metadata:
-        pq = 3
-        meter_devices = {
-            'disaggregate' : {
-                'model': str(EventbasedCombinationDisaggregatorModel), #self.model.MODEL_NAME,
-                'sample_period': sample_period if rest_powerflow_included else 0, # Makes it possible to use special load functionality
-                'max_sample_period': sample_period,
-                'measurements': [{
-                    'physical_quantity': 'power', #measurement.levels[0][0],
-                    'type': 'active' #measurement.levels, #[1][0]
-                }]
-            }}
-        
-        if rest_powerflow_included:
-            meter_devices['rest'] = {
-                    'model': 'rest',
-                    'sample_period': sample_period,
+        # DataSet and MeterDevice metadata only when not already available
+        try:
+            metadata = output_datastore.load_metadata()
+            timeframes.append(TimeFrame(start=metadata["timeframe"]["start"], end=metadata["timeframe"]["end"]))
+            total_timeframe = TimeFrameGroup(timeframes).get_timeframe()
+            dataset_metadata = {
+                'name': metadata["name"],
+                'date': metadata["date"],
+                'meter_devices': metadata["meter_devices"],
+                'timeframe': total_timeframe.to_dict()
+            }
+            output_datastore.save_metadata('/', dataset_metadata)
+        except:
+            pq = 3
+            meter_devices = {
+                'disaggregate' : {
+                    'model': str(EventbasedCombinationDisaggregatorModel), #self.model.MODEL_NAME,
+                    'sample_period': sample_period if rest_powerflow_included else 0, # Makes it possible to use special load functionality
                     'max_sample_period': sample_period,
                     'measurements': [{
-                        'physical_quantity': 'power', #measurement.levels, #[0][0],
+                        'physical_quantity': 'power', #measurement.levels[0][0],
                         'type': 'active' #measurement.levels, #[1][0]
                     }]
-                }
-        merged_timeframes = merge_timeframes(timeframes, gap=sample_period)
-        total_timeframe = TimeFrame(merged_timeframes[0].start,
-                                    merged_timeframes[-1].end)
+                }}
 
-        date_now = datetime.now().isoformat().split('.')[0]
-        dataset_metadata = {
-            'name': str(EventbasedCombinationDisaggregatorModel),
-            'date': date_now,
-            'meter_devices': meter_devices,
-            'timeframe': total_timeframe.to_dict()
-        }
-        output_datastore.save_metadata('/', dataset_metadata)
-        
-        # Building metadata
+            if rest_powerflow_included:
+                meter_devices['rest'] = {
+                        'model': 'rest',
+                        'sample_period': sample_period,
+                        'max_sample_period': sample_period,
+                        'measurements': [{
+                            'physical_quantity': 'power', #measurement.levels, #[0][0],
+                            'type': 'active' #measurement.levels, #[1][0]
+                        }]
+                    }
+            total_timeframe = TimeFrameGroup(timeframes).get_timeframe()
+
+            date_now = datetime.now().isoformat().split('.')[0]
+            dataset_metadata = {
+                'name': str(EventbasedCombinationDisaggregatorModel),
+                'date': date_now,
+                'meter_devices': meter_devices,
+                'timeframe': total_timeframe.to_dict()
+            }
+            output_datastore.save_metadata('/', dataset_metadata)
+
+
+        # Building metadata always stored for the new buildings
         for i in range(3):
             phase_building = building * 10 + i 
             building_path = '/building{}'.format(phase_building)
@@ -1392,6 +1422,10 @@ class EventbasedCombination(SupervisedDisaggregator):
             print(building_path)
             output_datastore.save_metadata(building_path, building_metadata)
    
+
+
+
+
 
 
     #region Clustering steps
@@ -1813,7 +1847,8 @@ class EventbasedCombination(SupervisedDisaggregator):
                 building_path = '/building{}'.format(mains.building()* 10 + phase)
                 for meter in model.centroids[phase].index.values:
                     key = '{}/elec/meter{:d}'.format(building_path, meter + 2) # Weil 0 nicht gibt und Meter1 das undiaggregierte ist und 
-                    output_datastore.append(key, df) 
+                    output_datastore.append(key, df)
+            # Hier muss ich den rest noch setzen noch setzen
             #output_datastore.append(key, df.rename(columns={0:meter})) Ich gehe davon aus, dass alle Daten rein kommen und ich rest nicht setzen muss
 
             # Then store the metadata

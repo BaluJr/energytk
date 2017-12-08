@@ -1010,7 +1010,7 @@ class MeterGroup(Electric):
             good_sections = [TimeFrameGroup([self.get_timeframe()])]
             for meter in self.meters:
                 good_sections.append(meter.good_sections())
-            good_sections = TimeFrameGroup.intersect_many(good_sections) # HIER DESTSTELLEN WARUM DAS NICHT GEHT. IHM FEHLT ._data, Dann normal disagg, Clustern checken
+            good_sections = TimeFrameGroup.intersect_many(good_sections)
             return good_sections
             #return self.meters[0].good_sections(**load_kwargs)
         else:
