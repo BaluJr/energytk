@@ -214,7 +214,9 @@ class TimeFrameGroup():
     def matching_many(groups):
         ''' 
         Function to do a do a fast matching between many timeframes
-        
+        If the groups are two TimeFrameGroups as binary estimator, this 
+        is the accuracy.
+
         Paramters
         ---------
         groups: [nilmtk.TimeFrameGroup]
@@ -237,6 +239,49 @@ class TimeFrameGroup():
         return TimeFrameGroup(result).simplify()
 
 
+    def get_TP_TN_FP_FN(self, ground_truth):
+        ''' Returns all the basic descriptors of binary classifier.
+
+        Paramters
+        ---------
+        ground_truth: TimeFrameGroup
+            The ground truth this timeframegroup is compared with.
+
+        Returns
+        -------
+        TP: TimeFrameGroup
+            TimeFrameGroup designating sections where the state is True Positive
+        TN: TimeFrameGroup
+            TimeFrameGroup designating sections where the state is True Negative
+        FP: TimeFrameGroup
+            TimeFrameGroup designating sections where the state is False Positive
+        FN: TimeFrameGroup
+            TimeFrameGroup designating sections where the state is False Negative
+        '''
+        all_events = pd.Series()
+        for i, cur in enumerate([self, ground_truth]):
+            i += 1 # The i is used to distinguish FP and FN
+            all_events = all_events.append(pd.Series(1*i, index=pd.DatetimeIndex(cur._df['section_start'])))
+            all_events = all_events.append(pd.Series(-1*i, index=pd.DatetimeIndex(cur._df['section_end'])))
+        all_events.sort_index(inplace=True)
+        all_events_sum = all_events.cumsum()
+
+        TP = (all_events_sum == 3) # both on
+        TN = (all_events_sum == 0) # both off
+        FP = (all_events_sum == 1) # gt == 0 but self == 1
+        FN = (all_events_sum == 2) # gt == 2 but self == 0
+
+        # Remove last, which is always created after end of all sections
+        results = []
+        for cur in [TP, TN, FP, FN]:
+            starts = all_events.index[cur][:-1] 
+            ends = cur.shift(1)
+            if len(ends > 0):
+                ends[0] = False
+            ends = all_events[ends].index
+            result = pd.DataFrame({'section_start': starts, 'section_end':ends})
+            results.apply(TimeFrameGroup(result).simplify())
+        return results
 
     def uptime(self):
         """
@@ -382,7 +427,9 @@ class TimeFrameGroup():
         if len(self._df) == 0:
             return iter([])
         else:
-            return iter(list(self._df.apply(lambda row: TimeFrame(start=row['section_start'], end=row['section_end']), axis=1)))
+            for i, row in self._df.iterrows():
+                yield TimeFrame(start=row['section_start'], end=row['section_end'])
+            #return iter(list(self._df.apply(lambda row: TimeFrame(start=row['section_start'], end=row['section_end']), axis=1)))
         
 
     def __getitem__(self, i):

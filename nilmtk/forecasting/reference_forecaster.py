@@ -7,7 +7,7 @@ import pickle as pckl
 
 class ReferenceForecasterModel(object):
     params = {
-        # The strategy to use: ["last_day_same_time", "last_week_same_time", "keep_constant"]
+        # The strategy to use: ["last_day_same_time", "last_week_same_time"]
         'strategy': "last_day_same_time"
     }
 
@@ -29,11 +29,74 @@ class ReferenceForecaster(Forecaster):
         """
         super(ReferenceForecaster, self).__init__(model)
 
-    def train(self, meters, verbose = False):
-        section = TimeFrame(start=pd.Timestamp("1.1.2016", tz = 'UTC'), end = pd.Timestamp("30.05.2016", tz = 'UTC'))
-        #powerflow = meters.power_series_all_data(verbose = True, sample_period=3600, sections=sections).dropna()
-        powerflow = pckl.load(open("./ForecastingBenchmark.pckl", "rb"))        
-        prediction_error = (powerflow - powerflow.shift(24)) / (powerflow)
 
-    def forecast(self):
-        pass     
+
+    def _apply_strategy(self, strategy, orginal_load):
+        '''
+        This method uses the learned model to predict the future
+        For each forecaster the forecast horizon is derived from its 
+        smallest shift value.
+        All meters that contain a powerflow are considered part of the 
+        group to forecast.
+
+        Parameters
+        ----------
+        strategy: str
+            The strategy to use. For descriptions see model.params.strategy.
+        original_load:
+            The original load, which is adapted.
+        Returns
+        -------
+        The adapted original timeframe sothat it fits the chosen strategy.
+        '''
+        if strategy == "last_day_same_time":
+            orginal_load = orginal_load.shift(96)
+        elif strategy == "last_week_same_time":
+            orginal_load = orginal_load.shift(96*7)
+        else:
+            raise Exception("Strategy unknown!")
+        return orginal_load.dropna()
+
+
+    def forecast(self, meters, ext_dataset, timestamps, horizon = pd.Timedelta('1d'), verbose = False):
+        '''
+        This method uses the learned model to predict the future
+        For each forecaster the forecast horizon is derived from its 
+        smallest shift value.
+        All meters that contain a powerflow are considered part of the 
+        group to forecast.
+
+        Parameters
+        ----------
+        meters: nilmtk.DataSet
+            The meters from which the demand is loaded.
+        ext_dataset: nilmtk.DataSet
+            The storage with external data
+        timestamps: pd.Timestamp, [pd.TimeStamp,...] or pd.DatetimeIndex
+            A single point or a list of points for which the forecasting is performed.
+            All contained model horizonts are applied to each point in time.
+        horizon: pd.Timedelta (optional)
+            The horizon in the future to forecast for.
+        verbose: bool (optional)
+            Whether additional output shall be printed during training.
+
+        Returns
+        -------
+        forecasts: pd.DataFrame
+            A DataFrame containing the forecasts for each Timestamp. 
+            One column for each timestamp and one row for each forecaster 
+            horizon.
+        '''
+        params = self.model.params
+        forecast = pd.DataFrame(columns = timestamps)
+
+        
+        # Load the data and apply strategy
+        chunk = self._load_data(meters)
+        chunk = self._apply_strategy(params['strategy'], chunk)
+
+        # Forecast
+        for timestamp in timestamps:
+            forecast[timestamp] = chunk[timestamp: timestamp + pd.Timedelta('1d')].reset_index(drop=True)
+        
+        return forecast

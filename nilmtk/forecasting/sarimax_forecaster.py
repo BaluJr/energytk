@@ -7,13 +7,14 @@ import requests
 from io import BytesIO
 from nilmtk import TimeFrame, TimeFrameGroup
 import pickle as pckl
-
-#https://www.analyticsvidhya.com/blog/2016/02/time-series-forecasting-codes-python/
+from sklearn.preprocessing import StandardScaler
 
 class SarimaxForecasterModel(object):
     '''
     This is the model used for forecasting. It is an enumerable with one set of the below attributes
-    for each entry. Each entry represents one forecasting horizon
+    for each entry. Each entry represents one forecasting horizon.
+    #https://www.analyticsvidhya.com/blog/2016/02/time-series-forecasting-codes-python/
+    #http://www.seanabu.com/2016/03/22/time-series-seasonal-ARIMA-model-in-python/
 
     Attributes
     ----------
@@ -39,11 +40,11 @@ class SarimaxForecasterModel(object):
         # Seasonal
         'S': 96,
 
-        # Die externen Daten werden direkt bei fit mit reingegeben
-        ## The feature, which is used from the external data
-        #'ext_data': 'temperature',  
-        ## The external, which is used to create the vectors for each element, DataSet
-        #'ext_data_dataset': "C:\\Users\\maxim_000\\Documents\\InformatikStudium_ETH\\Masterarbeit\\6_Data\\Tmp\\ExtData.hdf",
+        # The feature, which is used from the external data
+        'external_feature': ('temperature', ''),  
+
+        # Only the last elements of original_data are used for training (default = 10 days)
+        "trainingdata_limit": 960 * 3
     }
 
     model = None
@@ -70,94 +71,88 @@ class SarimaxForecaster(Forecaster):
         super(SarimaxForecaster, self).__init__(model)
 
 
-    def train(self, meters, extDataSet, verbose = False):
+    def _stationary_data(self, load):
+        ''' Makes the data stationary by different techniques.
+        This is necessary as a preprocessing step to appy ARIMA models 
+        afterwards.
+
+        Parameters:
+        ----------
+        load: pd.Series
+            The original load which might be seasonal and not stationary.
+
+        Returns
+        -------
+        stationary_load:
+            The load in its stationary form
         '''
-        Does the training of the ARIMA model. Each load chunk is translated into 
-        multiple minibatches used for training the network.
+        self.model.standardscaler = StandardScaler()
+        load.iloc[:,0] = self.model.standardscaler.fit_transform(load.values)
+        return load
+
+
+    def forecast(self, meters, ext_dataset, horizon = pd.Timedelta('1d'), return_residuals=False, verbose = False):
+        '''
+        Does the forecasting for an ARIMA model. As the model is only valid 
+        for a certain dataset and cannot be generalized, 
         
         Parameters
         ----------
-        meters: nilmtk.DataSet
-            The meters from which the demand is loaded
-        extDataSet: nilmtk.DataSet
+        meters: nilmtk.DataSet or str
+            The meters from which the demand is loaded. 
+            Alternatively a path to a PickleFile. 
+        ext_dataset: nilmtk.DataSet or str
             The External Dataset containing the fitting data.
-        verbose: bool
+            Alternatively a path to a PickleFile. 
+        horizon: pd.Timedelta (optional)
+            The horizon in the future to forecast for.
+        return_residuals: bool (optional)
+            Whether to return the residuals as additional information
+        verbose: bool (optional)
             Whether additional output shall be printed during training.
         '''
 
         params = self.model.params
         
-        # 1. Load the data
-        timeframe = TimeFrame(start=pd.Timestamp("1.1.2016", tz = 'UTC'), end = pd.Timestamp("15.03.2017", tz = 'UTC'))
-        sections = TimeFrameGroup([TimeFrame(start=pd.Timestamp("1.1.2016", tz = 'UTC'), end = pd.Timestamp("15.03.2017", tz = 'UTC'))]) #30.05.2016
-        #powerflow = meters.power_series_all_data(verbose = True, sample_period=900, sections=sections).dropna()
-        #pckl.dump(powerflow, open("./ForecastingBenchmark15min.pckl", "wb"))
-        #return
+        # Load and preprocess the data
+        chunk = self._load_data(meters)
+        chunk = self._stationary_data(chunk)
+        chunk = chunk[-params['trainingdata_limit']:]
 
-        # Kommt von 820
-        powerflow = pckl.load(open("./ForecastingBenchmark15min.pckl", "rb"))
-        learn = powerflow[-1920:-96]
-        extData = extDataSet.get_data_for_group('820', timeframe, 60*60, [('temperature','')])
+        ext_chunk, ext_chunk_future = None, None
+        if not params['external_feature'] is None:
+            ext_chunk = self._add_external_data(chunk.index, ext_dataset, [params['external_feature']], horizon)
+            ext_chunk, ext_chunk_future = ext_chunk[:chunk.index[-1]], ext_chunk[chunk.index[-1]:]
+            ext_chunk = ext_chunk[-params['trainingdata_limit']:]
 
-        # Load the external data specified in the params
-        #periodsExtData = [int(dev['sample_period']) for dev in extDataSet.metadata['meter_devices'].values()]
-        #min_sampling_period = min(periodsExtData + [self.model.params['self_corr_freq']]) * 2
-
-        # 2. Make data stationary   
-
-
-        # 3. Define the best paramters
-
-
-        # 4. Fit the model
-        self.model.model_sarimax = model = SARIMAX(endog = learn, order=(params['p'],params['d'],params['q']), 
-                                                   seasonal_order = (params['P'],params['D'],params['Q'], params['S']),
-                                                   enforce_stationarity = False, enforce_invertibility = False)#, exog = extData[-960:-96])
-        model_fit = model.fit(disp=True)
-        #self.model.model_arima = model = ARIMA(endog = learn.values, order=(params['p'],params['d'],params['q']), exog = extData[1:-96])
-        #model_fit2 = model.fit(disp=True)
+        # Fit the model if not already done
+        model = SARIMAX(endog = chunk, order=(params['p'],params['d'],params['q']), 
+                        seasonal_order = (params['P'],params['D'],params['Q'], params['S']), 
+                        enforce_stationarity = False, enforce_invertibility = False)#, exog = ext_chunk)
+        self.model.model_sarimax = model
+        model_fit = model.fit(disp=verbose)
+        if return_residuals:
+            residuals = DataFrame(model_fit.resid)
 
         # Do a forecast for so far unknown region and scale back
-        forecast = model_fit.predict(start=len(powerflow)-96, end=len(powerflow), dynamic=True)
-        #forecast2 = model_fit2.predict(start=len(powerflow)-96, end=len(powerflow), dynamic=True)
+        forecast = model_fit.predict(start=len(data), end=len(data)+horizon, dynamic=True, exog = ext_chunk_future)
         
-        # Plot the forecast
-        series_to_plot = pd.concat([powerflow, forecast], axis = 1).fillna(0)
-        series_to_plot.plot()
-        pyplot.show()
-        i = abs['tst']
+        # Print the summaries if verbose
+        if verbose == True:
+            print(model_fit.summary())
+            if return_residuals:
+                print(residuals.describe())
 
-        # Plot residual errors
-        residuals =pd.DataFrame(model_fit.resid)
-        residuals.plot()
-        pyplot.show()
-        residuals.plot(kind='kde')
-        pyplot.show()
-        print(residuals.describe())
-        
-        # Print the summary 
-        print(model_fit.summary())
-        print("############ ############ ############ ############ ############")
-        print(model_fit2.summary())
+        if return_residuals:
+            return forecast, residuals
+        else:
+            return forecast
 
         
-
-    def forecast(self):
+    def test(self):
         '''
-        This method uses the learned model to predict the future
-        For each forecaster the forecast horizon is derived from its 
-        smallest shift value.
-        All meters that contain a powerflow are considered part of the 
-        group to forecast.
-
-        Parameters
-        ----------
-        meters: nilmtk.DataSet
-            The meters from which the demand is loaded.
-        timestamp: [pd.TimeStamp,...] or pd.DatetimeIndex
-            The point in time from which the prognoses is performed.
-        verbose: bool
-            Whether additional output shall be printed during training.
+        This is just an exemplanatory test that shows the usage of 
+        the SARIMAX model. Can be removed.
         '''
 
         series = read_csv('shampoo-sales.csv', header=0, parse_dates=[0], index_col=0, squeeze=True, date_parser=parser)
@@ -177,6 +172,7 @@ class SarimaxForecaster(Forecaster):
             print('predicted=%f, expected=%f' % (yhat, obs))
             error = mean_squared_error(test, predictions)
         print('Test MSE: %.3f' % error)
+
         # plot
         pyplot.plot(test)
         pyplot.plot(predictions, color='red')

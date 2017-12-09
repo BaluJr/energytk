@@ -48,11 +48,10 @@ import itertools
 import gc
 import pickle as pckl
 import matplotlib.pyplot as plt
-
+import sklearn.metrics
 
 ##################################
-# Error metrics from disaggregation point of view (Also for forecasting)
-
+# Error metrics from disaggregation point of view
 def error_in_assigned_energy(pred_meter, ground_truth_meter):
     """ ORIGINAL
     A) Compute error in assigned energy. OK
@@ -119,7 +118,7 @@ def rms_error_power(pred_meter, ground_truth_meter):
     sum_of_squared_diff = 0.0
     n_samples = 0
     for aligned_meters_chunk in align_two_meters(pred_meter, ground_truth_meter):
-        diff = aligned_meters_chunk.icol(0) - aligned_meters_chunk.icol(1)
+        diff = pd.eval(aligned_meters_chunk.icol(0) - aligned_meters_chunk.icol(1))
         diff.dropna(inplace=True)
         sum_of_squared_diff += (diff ** 2).sum()
         n_samples += len(diff)
@@ -128,15 +127,13 @@ def rms_error_power(pred_meter, ground_truth_meter):
 
 
 def mae(pred_meter, ground_truth_meter):
-    ''' E) This function calculates the mean average percentage error used for 
-    forecasting. It takes to electric as input, whose powerflow function
-    it uses.
+    ''' E) This function calculates the mean average percentage error
     '''
     
     sum_of_absolute_error = 0.0
     n_samples = 0
     for aligned_meters_chunk in align_two_meters(pred_meter, ground_truth_meter):
-        diff = aligned_meters_chunk.icol(0) - aligned_meters_chunk.icol(1)
+        diff = pd.eval(aligned_meters_chunk.icol(0) - aligned_meters_chunk.icol(1))
         diff.dropna(inplace=True)
         sum_of_absolute_error += diff.abs().sum()
         n_samples += len(diff)
@@ -179,29 +176,199 @@ def mean_normalized_error_power(pred_meter, ground_truth_meter):
 
 def precision(pred_meter, ground_truth_meter):
     '''
-    This can be easily calculated by using the switched on, switched off stats.
-    This is efficient.
+    Precision defines the ration of the identified true elements over the overall 
+    amount of true elements. A precision of 1 means, that all true elements have 
+    been identified.
+
+    This can be efficiently calculated by using the overbasepower stats.
+
+    Paramters
+    ---------
+    pred_meter: nilmtk.Elec or TimeFrameGroup
+        The prediction meter from which the on-sections are extracted. 
+        Can be also immediatly the TimeFrameGroup of on-sections.
+    ground_truth_meter: nilmtk.Elec or TimeFrameGroup
+        The prediction meter from which the on-sections are extracted. 
+        Can be also immediatly the TimeFrameGroup of on-sections.
+
+    Returns
+    -------
+    precision: float
+        The precision as a value between 0 and 1.
     '''
-    pass
+    if not type(pred_meter) is TimeFrameGroup:
+        pred_meter = pred_meter.overbasepower_sections()
+    if not type(ground_truth_meter) is TimeFrameGroup:
+        ground_truth_meter = ground_truth_meter.overbasepower_sections()
+    
+    true_positives = ground_truth_meter.intersection(pred_meter).uptime()
+    selected_elements = pred_meter.uptime()
+    return true_positives / selected_elements
+
 
 def recall(pred_meter, ground_truth_meter):
     '''
-    This can be easily calculated by using the switched on, switched off stats.
-    This is efficient.
+    Recall defines the ratio how many elements have been chosen as true over the 
+    amount of elements which would really have been true. A precision of 1 would mean,
+    that there are no elements, which ahve been accidentally chosen as true.
+    
+    This can be efficiently calculated by using the overbasepower stats.
+    
+    Paramters
+    ---------
+    pred_meter: nilmtk.Elec or TimeFrameGroup
+        The prediction meter from which the on-sections are extracted. 
+        Can be also immediatly the TimeFrameGroup of on-sections.
+    ground_truth_meter: nilmtk.Elec or TimeFrameGroup
+        The prediction meter from which the on-sections are extracted. 
+        Can be also immediatly the TimeFrameGroup of on-sections.
+
+    Returns
+    -------
+    recall: float
+        The recall as a value between 0 and 1.
     '''
-    pass
+    if not type(pred_meter) is TimeFrameGroup:
+        pred_meter = pred_meter.overbasepower_sections()
+    if not type(ground_truth_meter) is TimeFrameGroup:
+        ground_truth_meter = ground_truth_meter.overbasepower_sections()
+    
+    true_positives = ground_truth_meter.intersection(pred_meter).uptime()
+    relevant_elements = ground_truth.uptime()
+    return true_positives / relevant_elements
 
 
 def f1_score(pred_meter, ground_truth_meter):
     ''' ORIGINAL
     I Compute F1 scores.
+    Harmonic mean of precision and recall.
 
     .. math::
         F_{score}^{(n)} = \\frac
             {2 * Precision * Recall}
             {Precision + Recall}
+
+    Paramters
+    ---------
+    pred_meter: nilmtk.Elec or TimeFrameGroup
+        The prediction meter from which the on-sections are extracted. 
+        Can be also immediatly the TimeFrameGroup of on-sections.
+    ground_truth_meter: nilmtk.Elec or TimeFrameGroup
+        The prediction meter from which the on-sections are extracted. 
+        Can be also immediatly the TimeFrameGroup of on-sections.
+
+    Returns
+    -------
+    recall: float
+        The recall as a value between 0 and 1.
     '''
-    pass
+    if not type(pred_meter) is TimeFrameGroup:
+        pred_meter = pred_meter.overbasepower_sections()
+    if not type(ground_truth_meter) is TimeFrameGroup:
+        ground_truth_meter = ground_truth_meter.overbasepower_sections()
+        
+    true_positives = ground_truth_meter.intersection(pred_meter).uptime()
+    relevant_elements = ground_truth.uptime()
+    selected_elements = pred_meter.uptime()
+
+    precision = true_positives / relevant_elements
+    recall = true_positives / relevant_elements
+
+    return (2 * precision * recall / (precision + recall))
+
+
+
+def accuracy(pred_meter, ground_truth_meter, good_sections = None):
+    ''' The accuracy of the prediction.
+
+    
+    .. math::
+        ACC = \\frac {TP + TN}{P+N}} = \frac {TP +TN}{TP + TN + FP + FN }}
+        
+    Paramters
+    ---------
+    pred_meter: nilmtk.Elec or TimeFrameGroup
+        The prediction meter from which the on-sections are extracted. 
+        Can be also immediatly the TimeFrameGroup of on-sections.
+        IMPORTANT: I considered to have good_sections everywhere or 
+        at the same places as ground_truth.
+    ground_truth_meter: nilmtk.Elec or TimeFrameGroup
+        The prediction meter from which the on-sections are extracted. 
+        Can be also immediatly the TimeFrameGroup of on-sections.
+    good_sections: optional
+        As it cannot be identified whether the meters are 0 because 
+        they are really 0 or because it is outside of good_sections, 
+        this has to be given as additonal parameter. 
+        If it is None and the other parameters are really meters, 
+        the gound_truths good_sections are used. Otherwise all is considered 
+        a good_section.
+    Returns
+    -------
+    recall: float
+        The recall as a value between 0 and 1.
+    '''
+    if good_sections is None and type(ground_truth_meter) is nilmtk.Electric:
+        good_sections = ground_truth_meter.good_setions()
+    if not type(pred_meter) is TimeFrameGroup:
+        pred_meter = pred_meter.overbasepower_sections()
+    if not type(ground_truth_meter) is TimeFrameGroup:
+        ground_truth_meter = ground_truth_meter.overbasepower_sections()
+        
+    cur_matches = pred_sec.matching(gt_sec)
+    # Throw away part in invalid area:
+    cur_matches = cur_matches.intersection(gt_good_sec[j]) 
+    matching_frac = cur_matches.uptime() / gt_good_sec[j].uptime()
+    return matching_frac
+
+
+def mcc(pred_meter, ground_truth_meter, good_sections = None):
+    ''' Calculates Matthews correlation coefficient.
+    
+    This is a good measurement to define the assignment of a 
+    disaggregation to ground_truth element. It balances the error 
+    for False Positives and False Negatives also when the groups are 
+    different in size. This avoids the problem, that a ground_truth
+    element which is always off, will be the assignment target for 
+
+
+    
+    .. math::
+        MCC =\\frac  {TP \\times TN-FP \\times FN}{{\\sqrt{(TP+FP)(TP+FN)(TN+FP)(TN+FN)}}}
+        
+    Paramters
+    ---------
+    pred_meter: nilmtk.Elec or TimeFrameGroup
+        The prediction meter from which the on-sections are extracted. 
+        Can be also immediatly the TimeFrameGroup of on-sections.
+        IMPORTANT: I considered to have good_sections everywhere or 
+        at the same places as ground_truth.
+    ground_truth_meter: nilmtk.Elec or TimeFrameGroup
+        The prediction meter from which the on-sections are extracted. 
+        Can be also immediatly the TimeFrameGroup of on-sections.
+    good_sections: optional
+        As it cannot be identified whether the meters are 0 because 
+        they are really 0 or because it is outside of good_sections, 
+        this has to be given as additonal parameter. 
+        If it is None and the other parameters are really meters, 
+        the gound_truths good_sections are used. Otherwise all is considered 
+        a good_section.
+    Returns
+    -------
+    recall: float
+        The recall as a value between 0 and 1.
+    '''
+    if good_sections is None and type(ground_truth_meter) is nilmtk.Electric:
+        good_sections = ground_truth_meter.good_setions()
+    if not type(pred_meter) is TimeFrameGroup:
+        pred_meter = pred_meter.overbasepower_sections()
+    if not type(ground_truth_meter) is TimeFrameGroup:
+        ground_truth_meter = ground_truth_meter.overbasepower_sections()
+
+    TP, TN, FP, FN = pred_meter.get_TP_TN_FP_FN(ground_truth_meter)
+
+    mcc  = (TP*TN - FP*FN) / np.sqrt((TP+FP)(TP+FN)(TN+FP)(TN+FN))
+
+    return mcc
 
 
 ##################################
@@ -240,30 +407,271 @@ def disaggregation_error(dpred_meter, ground_truth_meter):
 
 
 ##################################
-# Scaled errors mostly used for forecasting
+# Meta funktion
 
-def mape(y_true, y_pred):
+'''
+This array contains all information about the available metrics.
+This comprises:
+- lbl:      Human readable name of the metric used as caption in plots
+- fn:       Reference to the function implementing the metric
+- better:   Whether a higher or lower value is better (1 = higher, -1 = lower)
+'''
+metrics_dictionary = {
+    'A_AssignedEnergy':
+        {'lbl': "Delta Assigned Energy", 'fn':error_in_assigned_energy, 'better':-1},
+    'B_PercentageAssignedEnergy': 
+        {'lbl': "Delta Assigned Energy [%]", 'fn':percetage_of_assigned_energy, 'better':-1},
+    'C_DeviationOfAssignedEnergy': 
+        {'lbl': "Deviation Assigned Energy", 'fn': deviation_of_assigned_energy, 'better':-1},
+    'D_RMSE': 
+        {'lbl': "RMSE", 'fn': rms_error_power, 'better':-1},
+    'E_MAE': 
+        {'lbl': "MAE", 'fn': mae, 'better':-1},
+    'F_': 
+        {'lbl': "S-score", 'fn': mean_normalized_error_power, 'better':-1},
+    'G_Precision': 
+        {'lbl': "Precision", 'fn': precision, 'better': 1}, 
+    'H_Recall': 
+        {'lbl': "Recall", 'fn': recall, 'better': 1},
+    'I_F1':
+        {'lbl': "F1-Score", 'fn': f1_score, 'better': 1},
+    'Accuracy':
+        {'lbl': "Accuracy", 'fn': accuracy, 'better': 1},
+    'MCC':
+        {'lbl': "MCC", 'fn': mcc, 'better': 1},
+    'J_TotalEnergyCorrectlyAssigned': 
+        {'lbl': "Correctly Assigned Energy", 'fn': total_energy_correctly_assigned, 'better': 1},
+    "K": 
+        {'lbl': "", 'fn': disaggregation_error, 'better': 1},
+    #"MAPE":
+    #    {'lbl': "MAPE", 'fn': mape},
+    #"NRSME":
+    #    {'lbl': "NRSME", 'fn' : nrmse},
+    }
+
+
+def _pre_match():
+    pass
+
+
+def calculate_all_errors(metrics, prediction, ground_truth, prematching = None, timeframe = None,
+                         type = ('power', 'active'), verbose = False, highres = True):
+    '''
+    Calculates the metrics for the given ground_truth and prediction.
+    Matches the appliances by refering how good the on-off regions fi That means that multiple
+    disaggregated events may be counted to the same target appliance.
+
+    Paramters:
+    merics: [str]
+        A list of the metrics, defined in the above dictionary 'metrics_dictionary'
+    prediction: nilmtk.elec
+        The prediction, which has been made. Be it from forecasting or disaggregation.
+        Then a pd.Series or pd.DataFrame is given it is expected to be a good_section
+        without holes.
+    ground_truth: nilmtk.elec
+        The real powerflow, the prediction is compared to.
+        Then a pd.Series or pd.DataFrame is given it is expected to be a good_section
+        without holes.
+    prematching: str 
+        Has to be a metric, defined in the above dictionary 'metrics_dictionary'.
+        When set, the appliances are first pre matched using the given metric. 
+        Using a fast metric here, avoids the combinatorical explosion during the 
+        calculation of the other metrics later on.
+        Fast metrics are those based on stats instead of the powerflow. (eg. MCC)
+        (When some appliances fit perfectly to a certain appliance, 
+        they are combined as a single instance.)
+    timeframe: pd.Timeframe
+        The timeframe which is taken into account from prediction and ground_truth 
+        to determine the error. If kept None, the intersection of their timeframe 
+        is used.
+    type: index
+        When meters or DataFrames are given, this function defines which dimension is 
+        used for determining the error. Default ('power', 'active').    
+    verbose: bool
+        If additional output shall be given.
+    highres: bool
+        Whether high resolution is available. That makes it necessary to active 
+        the slower out of memory calculation. 
+        Todo: Should be automatically determined from sampling_rate = 0
+    '''
+
+    if timeframe is None:
+        timeframe = ground_truth.get_timeframe(intersection_instead_union=True).intersection(prediction.get_timeframe(intersection_instead_union=True))
+        
+    if not prematching is None:
+        # For acceleration preload all sections
+        pred_abovebaseload_sec = []
+        gt_abovebaseload_sec = []
+        gt_good_sec = []
+        for pred in prediction.meters:
+            pred_abovebaseload_sec.append(pred.overbasepower_sections(verbose = verbose))
+        assignments = []
+        for gt in ground_truth.meters:
+            gt_abovebaseload_sec.append(gt.overbasepower_sections(verbose = verbose))
+            gt_good_sec.append(gt.good_sections(verbose = verbose))
+            assignments.append([])
+        
+        # Select the combination, which maximizes the matching on times
+        for i, pred_sec in enumerate(pred_abovebaseload_sec):
+            best = 0
+            assign_to = -1
+            for j, gt_sec in enumerate(gt_abovebaseload_sec):
+                if verbose:
+                    print(str(i) + ":" + str(j))
+                score = mcc(pred_sec, gt_sec, gt_good_sec[j])
+                #cur_matches = pred_sec.matching(gt_sec)
+                #cur_matches = cur_matches.intersection(gt_good_sec[j]) # Throw away part in invalid area
+                #matching_frac = cur_matches.uptime() / gt_good_sec[j].uptime()
+                if score > best:
+                    best = score
+                    assign_to = j
+            if assign_to != -1:
+                assignments[assign_to].append(i)
+    #pckl.dump(assignments, open('tst_assignments.pckl','wb'))
+
+    stored_assignments = pckl.load(open('tst_assignments.pckl','rb'))
+    assigned_metegroups = []
+    for assignment in stored_assignments:
+        cur = []
+        for a in assignment:
+            cur.append(ground_truth.meters[a])
+        assigned_metegroups.append(MeterGroup(cur))
+        
+    # Calculate all given metric based on the matching
+    metric_names = [metrics_label_dictionary[metric] for metric in metrics]
+    result = pd.DataFrame(columns = metric_names)
+    cur_metric_results = {}
+    for metric in metrics:
+        name = metrics_dictionary[metric]['lbl']
+        fn = metrics_dictionary[metric]['fn']
+        for gt, pred in zip(ground_truth.meters, assigned_metegroups):
+            cur_metric_results = fn(pred, gt)[type]
+            appliance_name = gt.appliances[0].type['type']
+            result.loc[appliance_name, name] = cur_metric_results
+    return result
+        
+
+
+def _create_temp_elecmeter_identifiers(n):
+    """
+    This function creates temporary Ids which are used to 
+    pair together all elements.
+
+    Parameters
+    ----------
+    n : Amount of elecmeter identifiers
+
+    Returns
+    -------
+    ElecMeterID or MeterGroupID with dataset replaced with `dataset`
+    """
+    ids = []
+    for i in range(1, n+1):
+        ids.append(ElecMeterID(instance=i, building=0, dataset="temp"))
+    return ids
+
+
+
+def calculate_error_for_unsupervised(predictions, ground_truth, error_func):
+    """
+    In the completly unsupervised case it is not clear which disaggregated appliance 
+    belongs to which object of the ground_truth.
+    In a first step it just calculates the values by random mixing. 
+    This can be achieved by temporarily changing the ids to different pairs.
+    Combinatorical combination leads to explosion of calculation.
+
+    Paramters:
+    predictions: 
+        The timelines which have been predicted
+    ground_truth: 
+        The real timelines of appliances. (Has to be aligned to predictions)
+    error_func: 
+        The error_function to evaluate as a lambda
+    """
+    
+    # Get the one with the smaller length
+    if len(ground_truth) > len(predictions):
+        fewer_meters = predictions.meters
+        more_meters = ground_truth.meters
+    else:
+        fewer_meters = ground_truth.meters
+        more_meters = predictions.meters
+    identifiers = _create_temp_elecmeter_identifiers(len(fewer_meters))
+
+    # Backup the identifiers
+    backup_fewer = []
+    for i in range(len(fewer_meters)):
+        backup_fewer = fewer_meters[i].identifier
+        fewer_meters[i].identifier = identifiers[i]
+    backup_more = []
+    for gt in more_meters:
+        backup_more.append(gt.identifier)
+        gt.identifier = ElecMeterID(instance=999, building=0, dataset="temp")
+
+    # Assign new identifiers 
+    least_error = np.inf
+    least_error_perm = None
+    for perm in itertools.permutations(more_meters,len(fewer_meters)):
+        # Restore the original identifier
+        for i in range(len(more_meters)):
+            more_meters[i].identifier = ElecMeterID(instance=999, building=0, dataset="temp")
+        # Set the new ones for the current permutation
+        for j in range(len(perm)):
+            perm[j].identifier = identifiers[j]
+        # Calc the metric with the current permutation set up (idents changed since by-reference) 
+        error = error_in_assigned_energy(predictions, ground_truth)
+        if error < least_error:
+            least_error = error
+            least_error_perm = perm
+
+    # Restore the original identifiers
+    for i in range(len(fewer_meters)):
+        fewer_meters[i].identifier = backup_fewer[i]
+    for i in range(len(more_meters)):
+        more_meters[i] = backup_more[i] 
+
+
+
+
+def same_appliance_benchmark(predictions, ground_truth, error_func):
+    '''
+    This is a custom benchmark, which takes into account that multi-state machines might 
+    be spearated into multiple devices. It takes into account, that the most important 
+    thing is that an appliance is always the same appliance.
+    '''
+    pass
+
+
+
+
+
+
+##################################
+# Scaled errors used for forecasting
+# Separated from the others as calculated: Only forwards to scikit-learn metrics
+# These are just temporary solutions as the forecasting should be also stored as a 
+# elecmeter in the future.
+def mape(pred, ground_truth):
     ''' 
     K) This function calculates the mean average percentage error used for 
     forecasting. It takes to electric as input, whose powerflow function
     it uses.
     '''
-    main_meter = 0
-    # 1. Rausfinden ob partitiell ausführbar, dh chunkwise
-    # 2. Schauen ob implementierung in Pandas
-    # 3. Berechnen
-    # 4. Disaggregation plotfunktion schreiben
-    # 5. Wrapper um die ganzen Plot Funktionen herum schreiben
-    # 6. Die versch. Correlations einbauen
+    # Calc timeframe?
+    #cut = metrics.index.intersection(ground_truth.index)
+    #timeframe = TimeFrame(start = cut[0], end = cut[-1])
 
-    y_true, y_pred = np.array(y_true), np.array(y_pred)
-    return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+    pred, ground_truth = np.array(pred), np.array(ground_truth)
+    tst = sklearn.metrics.mean_absolute_error(pred, ground_truth)
+    return np.mean(np.abs((pred - ground_truth) / pred)) * 100
 
 
 def nrmse(disaggregations, ground_truth, tolerance = 0):
     ''' M) Normalized Root-Mean-Square Error (NRMSE)
     '''
-    pass
+    tst = sklearn.metrics.mean_squared_error(disaggregations, ground_truth)
+    tst = np.sqrt(tst)
+    return tst
 
 
 def fraction_energy_assigned_correctly(predictions, ground_truth):
@@ -311,248 +719,6 @@ def fraction_energy_assigned_correctly(predictions, ground_truth):
     return fraction
 
 
-
-metrics_label_dictionary = {
-    'A_AssignedEnergy': "Delta Assigned Energy",
-    'B_PercentageAssignedEnergy': "Delta Assigned Energy [%]",
-    'C_DeviationOfAssignedEnergy': "Deviation Assigned Energy",
-    'D_RMSE': "RMSE",
-    'E_MAE': "MAE",
-    'F_': "S-score",
-    'G_Precision': "Precision",
-    'H_Recall': "Recall",
-    'i_F1':"F1-Score",
-    'J_TotalEnergyCorrectlyAssigned': "Correctly Assigned Energy",
-    "K": "",
-    "MAPE":"MAPE",
-    "NRSME":"NRSME"
-}
-metrics_func_dictionary = {
-    'A_AssignedEnergy': error_in_assigned_energy,
-    'B_PercentageAssignedEnergy': percetage_of_assigned_energy,
-    'C_DeviationOfAssignedEnergy': deviation_of_assigned_energy,
-    'D_RMSE': rms_error_power,
-    'E_MAE': mae,
-    'F_': mean_normalized_error_power,
-    'G_Precision': precision,
-    'H_Recall': recall,
-    'i_F1': f1_score,
-    'J_TotalEnergyCorrectlyAssigned': total_energy_correctly_assigned,
-    "K": disaggregation_error,
-    "MAPE": mape,
-    "NRSME": nrmse
-}
-
-
-#### Meta funktion
-def calculate_all_errors(metrics, prediction, ground_truth, pre_matching = True, highres = True, timeframe = None, type = ('power', 'active')):
-    '''
-    Calculates the metrics for the given ground_truth and prediction.
-    Matches the appliances by refering how good the on-off regions fi That means that multiple
-    disaggregated events may be counted to the same target appliance.
-
-    Paramters:
-    prematching: When set to true, the appliances are first pre matched by looking onto the 
-                 areas of activation. (When some appliances fit perfectly to a certain appliance, 
-                 they are combined as a single instance.)
-    highres: whether high resolution is available
-    
-    '''
-    if timeframe is None:
-        timeframe = ground_truth.get_timeframe(intersection_instead_union=True).intersect(prediction.get_timeframe(intersection_instead_union=True))
-
-    print('calculate metric')
-    # When prematching selected calculate the non-zero sections
-    #if pre_matching:
-    #    pred_abovebaseload_sec = []
-    #    gt_abovebaseload_sec = []
-    #    gt_good_sec = []
-    #    for pred in prediction.meters:
-    #        pred_abovebaseload_sec.append(pred.overbasepower_sections(verbose = True))
-    #    assignments = []
-    #    for gt in ground_truth.meters:
-    #        gt_abovebaseload_sec.append(gt.overbasepower_sections(verbose = True))
-    #        gt_good_sec.append(gt.good_sections(verbose = True))
-    #        assignments.append([])#MeterGroup())
-        
-        ## Plot before assignment
-        #limit = TimeFrameGroup([timeframe])
-        #print("plot")
-        #fig = plt.figure(figsize=(50,50)) #, tight_layout=True)
-        #overall_length = max([len(gt_abovebaseload_sec), len(pred_abovebaseload_sec)])
-        #for i, cur_nonzero in enumerate(gt_abovebaseload_sec):
-        #    ax = fig.add_subplot(overall_length,2,1+i*2)
-        #    limited = cur_nonzero.intersection(limit)
-        #    print(str(i) + ": " + str(len(limited._df)))
-        #    limited.plot(ax=ax)
-        #    ax.set_title(ground_truth.meters[i].appliances[0].type['type'])
-        #    ax.set_xlim([timeframe.start, timeframe.end])
-        #    #plt.setp(ax.get_xticklabels(), visible=False)
-        #    plt.setp(ax.get_yticklabels(), visible=False)
-
-        #for i, cur_nonzero in enumerate(pred_abovebaseload_sec):
-        #    ax = fig.add_subplot(overall_length,2,2+i*2)
-        #    limited = cur_nonzero.intersection(limit)
-        #    print(str(i) + ": " + str(len(limited._df)))
-        #    limited.plot(ax=ax, )
-        #    ax.set_xlim([timeframe.start, timeframe.end])
-        #    #plt.setp(ax.get_xticklabels(), visible=False)
-        #    plt.setp(ax.get_yticklabels(), visible=False)
-        ##fig.subplots_adjust(hspace=.0)<
-        #plt.show()
-
-        ## Select the combination, which maximizes the matching on times
-        #for i, pred_sec in enumerate(pred_abovebaseload_sec):
-        #    best = 0
-        #    assign_to = -1
-        #    for j, gt_sec in enumerate(gt_abovebaseload_sec):
-        #        print(str(i) + ":" + str(j))
-        #        cur_matches = pred_sec.matching(gt_sec)
-        #        cur_matches = cur_matches.intersection(gt_good_sec[j]) # Throw away part in invalid area
-        #        matching_frac = cur_matches.uptime() / gt_good_sec[j].uptime()
-        #        if matching_frac > best:
-        #            best = matching_frac
-        #            assign_to = j
-        #    if assign_to != -1:
-        #        assignments[assign_to].append(i)#prediction.meters[i])
-
-        ## Plot after assignment
-        #print("Plot After")
-        #limit = TimeFrameGroup([timeframe])
-        #fig = plt.figure(figsize=(50,50)) #, tight_layout=True)
-        #overall_length = len(gt_abovebaseload_sec)
-        #for i, cur_nonzero in enumerate(gt_abovebaseload_sec):
-        #    # Print baseload left
-        #    ax = fig.add_subplot(overall_length,2,1+i*2)
-        #    limited = cur_nonzero.intersection(limit)
-        #    print(str(i) + ": " + str(len(limited._df)))
-        #    limited.plot(ax=ax)
-        #    ax.set_title(ground_truth.meters[i].appliances[0].type['type'])
-        #    ax.set_xlim([timeframe.start, timeframe.end])
-        #    plt.setp(ax.get_yticklabels(), visible=False)
-
-        #    # Plot assigned disaggregations right
-        #    cur_nonzero = TimeFrameGroup.union_many(map(lambda a: pred_abovebaseload_sec[a], assignments[i]))
-        #    ax = fig.add_subplot(overall_length,2,2+i*2)
-        #    limited = cur_nonzero.intersection(limit)
-        #    print(str(i) + ": " + str(len(limited._df)))
-        #    limited.plot(ax=ax)
-        #    ax.set_title(str(assignments[i]))
-        #    ax.set_xlim([timeframe.start, timeframe.end])
-        #    ax.autoscale_view()
-        #    #plt.setp(ax.get_xticklabels(), visible=False)
-        #    plt.setp(ax.get_yticklabels(), visible=False)
-        ##fig.subplots_adjust(hspace=.0)<
-        #plt.show()
-
-    #pckl.dump(assignments, open('tst_assignments.pckl','wb'))
-    #boom()
-
-    stored_assignments = pckl.load(open('tst_assignments.pckl','rb'))
-    assigned_metegroups = []
-    for assignment in stored_assignments:
-        cur = []
-        for a in assignment:
-            cur.append(ground_truth.meters[a])
-        assigned_metegroups.append(MeterGroup(cur))
-        
-
-    # Calculate the error based on the matching
-    metric_names = [metrics_label_dictionary[metric] for metric in metrics]
-    result = pd.DataFrame(columns = metric_names)
-    cur_metric_results = {}
-    
-    for metric in metrics:
-        name = metrics_label_dictionary[metric]
-        fn = metrics_func_dictionary[metric]
-        for gt, pred in zip(ground_truth.meters, assigned_metegroups):
-            cur_metric_results = fn(pred, gt)[type]
-            appliance_name = gt.appliances[0].type['type']
-            result.loc[appliance_name, name] = cur_metric_results
-    return result
-        
-
-def create_temp_elecmeter_identifiers(n):
-    """
-    This function creates temporary Ids which are used to 
-    pair together all elements.
-
-    Parameters
-    ----------
-    n : Amount of elecmeter identifiers
-
-    Returns
-    -------
-    ElecMeterID or MeterGroupID with dataset replaced with `dataset`
-    """
-    ids = []
-    for i in range(1, n+1):
-        ids.append(ElecMeterID(instance=i, building=0, dataset="temp"))
-    return ids
-
-
-def calculate_error_for_unsupervised(predictions, ground_truth, error_func):
-    """
-    In the completly unsupervised case it is not clear which disaggregated appliance 
-    belongs to which object of the ground_truth.
-    In a first step it just calculates the values by random mixing. 
-    This can be achieved by temporarily changing the ids to different pairs.
-
-    Paramters:
-    predictions: The timelines which have been predicted
-    ground_truth: The real timelines of appliances. (Has to be aligned to predictions)
-    error_func: The error_function to evaluate as a lambda
-    """
-    
-    # Get the one with the smaller length
-    if len(ground_truth) > len(predictions):
-        fewer_meters = predictions.meters
-        more_meters = ground_truth.meters
-    else:
-        fewer_meters = ground_truth.meters
-        more_meters = predictions.meters
-    identifiers = create_temp_elecmeter_identifiers(len(fewer_meters))
-
-    # Backup the identifiers
-    backup_fewer = []
-    for i in range(len(fewer_meters)):
-        backup_fewer = fewer_meters[i].identifier
-        fewer_meters[i].identifier = identifiers[i]
-    backup_more = []
-    for gt in more_meters:
-        backup_more.append(gt.identifier)
-        gt.identifier = ElecMeterID(instance=999, building=0, dataset="temp")
-
-    # Assign new identifiers 
-    least_error = np.inf
-    least_error_perm = None
-    for perm in itertools.permutations(more_meters,len(fewer_meters)):
-        # Restore the original identifier
-        for i in range(len(more_meters)):
-            more_meters[i].identifier = ElecMeterID(instance=999, building=0, dataset="temp")
-        # Set the new ones for the current permutation
-        for j in range(len(perm)):
-            perm[j].identifier = identifiers[j]
-        # Calc the metric with the current permutation set up (idents changed since by-reference) 
-        error = error_in_assigned_energy(predictions, ground_truth)
-        if error < least_error:
-            least_error = error
-            least_error_perm = perm
-
-    # Restore the original identifiers
-    for i in range(len(fewer_meters)):
-        fewer_meters[i].identifier = backup_fewer[i]
-    for i in range(len(more_meters)):
-        more_meters[i] = backup_more[i] 
-
-
-def same_appliance_benchmark(predictions, ground_truth, error_func):
-    '''
-    This is a custom benchmark, which takes into account that multi-state machines might 
-    be spearated into multiple devices. It takes into account, that the most important 
-    thing is that an appliance is always the same appliance.
-    '''
-    pass
 
 
 
@@ -832,7 +998,7 @@ def same_appliance_benchmark(predictions, ground_truth, error_func):
 ###################################
 ## Scaled errors mostly used for forecasting
 
-#def mape(y_true, y_pred):
+#def mape(pred, ground_truth):
 #    ''' 
 #    K) This function calculates the mean average percentage error used for 
 #    forecasting. It takes to electric as input, whose powerflow function
@@ -846,8 +1012,8 @@ def same_appliance_benchmark(predictions, ground_truth, error_func):
 #    # 5. Wrapper um die ganzen Plot Funktionen herum schreiben
 #    # 6. Die versch. Correlations einbauen
 
-#    y_true, y_pred = np.array(y_true), np.array(y_pred)
-#    return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+#    pred, ground_truth = np.array(pred), np.array(ground_truth)
+#    return np.mean(np.abs((pred - ground_truth) / pred)) * 100
 
 
 #def nrmse(disaggregations, ground_truth, tolerance = 0):
