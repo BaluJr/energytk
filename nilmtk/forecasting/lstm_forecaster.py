@@ -232,8 +232,8 @@ class LstmForecaster(Forecaster):
         
         # B) Prepare the data
         shifts = list(range(params['horizon'], 0, -1))
-        chunk = self._addTimeRelatedFeatures(chunk, params['weekday_features'], params['hour_features'])
-        chunk = self._addExternalData(chunk, extDataSet, section, self.model.params['externalFeatures'])
+        chunk = self._add_time_related_features(chunk, params['weekday_features'], params['hour_features'])
+        chunk = self._add_external_data(chunk, extDataSet, self.model.params['externalFeatures'])
         #chunk = self._addShiftsToChunkAndReduceToValid(chunk, shifts, params['models'])
         
         # C) Create the model

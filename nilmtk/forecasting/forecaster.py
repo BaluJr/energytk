@@ -1,16 +1,18 @@
 from __future__ import print_function, division
 from datetime import datetime
+from nilmtk import DataSet
 from nilmtk.timeframe import merge_timeframes, TimeFrame
 from nilmtk.elecmeter import ElecMeter
 from nilmtk.processing import Processing
 import pandas as pd 
 import cntk as C
-
+import pickle as pckl
 
 class ForecasterModel(object):
     '''
     As for the disaggregators this model contains the paramters and 
     the models. Additional attributes are defined in the model subclasses.
+    Currently all forecasters work with a base resolution of 15 minutes.
     '''
     parameters = {}
 
@@ -103,6 +105,34 @@ class Forecaster(Processing):
         '''
         return C.reduce_mean(C.abs(z - l))
 
+    
+    def _load_data(self, meters, section = None):
+        ''' Loads data from the given source.
+        
+        Parameters
+        ----------
+        meters: nilmtk.DataSet or str
+            The meters from which the demand is loaded. 
+            Alternatively a path to a PickleFile. 
+        ext_dataset: nilmtk.DataSet or str
+            The External Dataset containing the fitting data.
+            Alternatively a path to a PickleFile. 
+        section: nilmtk.TimeFrame
+            The timeframe used for training. Meters have to be valid within this region.
+        
+        Returns
+        -------
+        chunk: pd.DataFrame
+            The power series
+        '''
+        if type(meters) is DataSet:
+            if section is None:
+                section = meters.get_timeframe(intersection_instead_union=True)
+            sections = TimeFrameGroup([section])
+            chunk = meters.power_series_all_data(verbose = True, sample_period=3600, sections=sections).dropna()
+        else:
+            chunk = pd.DataFrame(pckl.load(open(meters, "rb"))).bfill().ffill() 
+        return chunk
 
 
     #region Data augmentation help functions
@@ -144,7 +174,7 @@ class Forecaster(Processing):
            
     
 
-    def _addTimeRelatedFeatures(self, chunk, weekday_features, hour_features):
+    def _add_time_related_features(self, chunk, weekday_features, hour_features):
         ''' Add the time related features.
         Todo: one could also include the day of year when using longer training
         periods.
@@ -183,18 +213,20 @@ class Forecaster(Processing):
 
 
 
-    def _addExternalData(self, chunk, ext_dataset, section, external_features):
+    def _add_external_data(self, chunk, ext_dataset, external_features, horizon=None):
         '''
         Currently coming from 820 (for all the meters I do consider)
     
         Paramters
         ---------
-        chunk: pd.DataFrame
+        chunk: pd.DataFrame, pd.DatetimeIndex
             The input which have to be augmented 
         ext_dataset: nilmtk.Dataset
             The Dataset, where the external Data can be found.
-        section: nilmtk.Timeframe
-            The timeframe for which the data shall be retrieved.
+        horizon: nilmtk.Timedelta
+            The timeframe in the future for which external data shall be 
+            retrieved. This will be outside the chunk area sothat it is extended.
+            Necessary for forecast with external data included.
         external_features: [indixes,... ]
             The indexes which shall be retrieved.
 
@@ -204,8 +236,21 @@ class Forecaster(Processing):
             The input chunk extended by the features given in 
             external_features.
         '''
+        if not horizon is None and not type(horizon) is pd.Timedelta:
+            raise Exception("Horizon has to be a DatetimeDelta")
+        if not external_features is None and not type(external_features) is list:
+            external_features = [external_features]
+            
+        # Sothat index is also supported
+        if type(chunk) is pd.DatetimeIndex:
+            chunk = pd.DataFrame(index = chunk)
+
         if len(external_features) > 0: 
+            section = TimeFrame(start=chunk.index[0], end=chunk.index[-1])
+            if not horizon is None:
+                section.end = section.end + horizon
             extData = ext_dataset.get_data_for_group('820', section, 60*15, external_features)[1:]
+            
         return pd.concat([chunk, extData], axis=1)
 
 

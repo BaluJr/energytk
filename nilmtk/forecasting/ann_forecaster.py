@@ -191,8 +191,8 @@ class AnnForecaster(Forecaster):
 
         # B) Prepare the data
         power_column = [('power', 'active')] #meters._convert_physical_quantity_and_ac_type_to_cols(physical_quantity = 'power', ignore_missing_columns = True)['cols']
-        chunk = self._addTimeRelatedFeatures(powerflow, params['weekdayFeatures'], params['hourFeatures'])
-        chunk = self._addExternalData(chunk, extDataSet, section, self.model.params['externalFeatures']) #sections[0]
+        chunk = self._add_time_related_features(powerflow, params['weekdayFeatures'], params['hourFeatures'])
+        chunk = self._add_external_data(chunk, extDataSet, self.model.params['externalFeatures'])
         chunk = self._addShiftsToChunkAndReduceToValid(chunk, params['shifts'], params['amount_of_models'])
         
 

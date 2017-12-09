@@ -9,7 +9,7 @@ from six import iteritems
 from .building import Building
 from nilmtk import MeterGroup
 from .datastore.datastore import join_key
-from nilmtk import DataSet
+from nilmtk import DataSet, TimeFrame
 
 # AHH! Die Klasse hatte ich ja zu erst fuer die Prediction gebaut
 
@@ -54,7 +54,7 @@ class ExternDataSet(DataSet):
 
 
     
-    def get_data_for_group(self, grouping_variable, timeframe, sample_period, variables):
+    def get_data_for_group(self, grouping_variable, sections, sample_period, variables):
         '''
         In contrast to get data for meter, this function loads the whole load.
         This is usefull when the data is shared for calculations of multiple
@@ -65,13 +65,20 @@ class ExternDataSet(DataSet):
         grouping_variable: str
             The variable after which the dataset is ordered. Would be the building number 
             in the default meter datasets. For external data it is for example the zip.
-        variables:
+        sections: nilmtk.Timeframe, [nilmtk.TimeFrame}, nilmtk.TimeFrameGroup
+            The section or the sections for which data shall be retrieved and appended
+        sample_period: int
+            Resolution of the returned DataFrame
+        variables: [indexes...]
             The variables which shall be loaded from the dataset.
         '''
+        if type(sections) is TimeFrame:
+            sections = {sections}
+        
         output = pd.DataFrame(columns=variables)
         group = self.buildings[grouping_variable]   # zip
         meters = group.elec                         # weather + holidays
-        for chunk in meters.load(cols = variables, sections = {timeframe}, sample_period = sample_period, ignore_missing_columns = True, chunksize = 100000):
+        for chunk in meters.load(cols = variables, sections = sections, sample_period = sample_period, ignore_missing_columns = True, chunksize = 100000):
             output = output.append(chunk)
         output = output.ffill().bfill()
         return output

@@ -7,6 +7,7 @@ from nilmtk.version import version as __version__
 from nilmtk.timeframe import TimeFrame
 from nilmtk.timeframegroup import TimeFrameGroup
 from nilmtk.elecmeter import ElecMeter
+from nilmtk.electric import Electric
 from nilmtk.datastore import DataStore, HDFDataStore, CSVDataStore, Key
 from nilmtk.metergroup import MeterGroup
 from nilmtk.appliance import Appliance

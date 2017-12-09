@@ -278,35 +278,7 @@ class AnnLstmForecaster(Forecaster):
             model = AnnLstmForecasterModel.load(folder)
 
         super(AnnLstmForecaster, self).__init__(model)
-
-    def _load_data(self, meters, section = None):
-        ''' Loads data from the given source.
         
-        Parameters
-        ----------
-        meters: nilmtk.DataSet or str
-            The meters from which the demand is loaded. 
-            Alternatively a path to a PickleFile. 
-        ext_dataset: nilmtk.DataSet or str
-            The External Dataset containing the fitting data.
-            Alternatively a path to a PickleFile. 
-        section: nilmtk.TimeFrame
-            The timeframe used for training. Meters have to be valid within this region.
-        
-        Returns
-        -------
-        chunk: pd.DataFrame
-            The power series
-        '''
-        if type(meters) is DataSet:
-            if section is None:
-                section = meters.get_timeframe(intersection_instead_union=True)
-            sections = TimeFrameGroup([section])
-            chunk = meters.power_series_all_data(verbose = True, sample_period=3600, sections=sections).dropna()
-        else:
-            chunk = pd.DataFrame(pckl.load(open(meters, "rb"))).bfill().ffill() 
-        return chunk
-
 
     def _prepare_data(self, chunk, ext_dataset):
         ''' Adds the additional featues to the data
@@ -327,11 +299,10 @@ class AnnLstmForecaster(Forecaster):
         params = self.model.params
         weekday_features = set(params['ann_weekdayFeatures']+params['lstm_weekdayFeatures'])
         hourFeatures = set(params['ann_hourFeatures'] + params['lstm_hourFeatures'])
-        chunk = self._addTimeRelatedFeatures(chunk, weekday_features, hourFeatures)
+        chunk = self._add_time_related_features(chunk, weekday_features, hourFeatures)
         external_features = set(self.model.params['ann_external_features'] + self.model.params['lstm_external_features']) 
         if len(external_features) != 0:
-            section = TimeFrame(start=chunk.index[0], end = chunk.index[-1])
-            chunk = self._addExternalData(chunk, ext_dataset, section, external_features)
+            chunk = self._add_external_data(chunk, ext_dataset, external_features)
         return chunk
 
     def _model_creation(self, modelnumber):
@@ -385,7 +356,9 @@ class AnnLstmForecaster(Forecaster):
 
     def _arrange_features_and_labels(self, chunk, for_forecast = False):
         ''' Arrange the inputs and labels as needed by the networks.
-        
+        It selects from the loaded data the features which are used and prepares
+        them by removing the mean and scaling to unit variance.
+
         Parameters
         ----------
         chunk: pd.DataFrame
@@ -410,12 +383,14 @@ class AnnLstmForecaster(Forecaster):
         lstm_features = params['lstm_external_features'] + params['lstm_hourFeatures'] + params['lstm_weekdayFeatures'] + [('power','active')]
         lstm_features = chunk[lstm_features].values
         if for_forecast:
-            # Nur Temporaer da gleicher Datensatz wie training
+            # Nur Temporaer da gleicher Datensatz wie training - Remove later
             self.model.ann_featurescaler = StandardScaler()
             self.model.ann_featurescaler.fit(ann_features)    
             self.model.lstm_featurescaler = StandardScaler()
-            self.model.lstm_featurescaler.fit(lstm_features)  
-            # ^wieder entfernen
+            self.model.lstm_featurescaler.fit(lstm_features)
+            self.model.labelscaler = StandardScaler()
+            self.model.labelscaler.fit(chunk[('power','active')].values)
+            # Ende remove
             ann_features = self.model.ann_featurescaler.transform(ann_features)    
             lstm_features = self.model.lstm_featurescaler.transform(lstm_features)   
             return ann_features, lstm_features
@@ -531,40 +506,39 @@ class AnnLstmForecaster(Forecaster):
             One column for each timestamp and one row for each forecaster 
             horizon.
         '''
-        forecast = pd.DataFrame(index = timestamps).transpose()
+        if type(timestamps) is list:
+            timestamps = pd.DatetimeIndex(timestamps)
+        params = self.model.params
+
+        forecast = pd.DataFrame(index = timestamps)
 
         # Prepare the input
         chunk = self._load_data(meters)
         chunk = self._prepare_data(chunk, ext_dataset)
+        #chunk = self._append_future_data(chunk) # This would be necessary to really forecast the future
         ann_features, lstm_features = self._arrange_features_and_labels(chunk, for_forecast = True)
 
+        # Determine the indices inside the dataset
+        items = pd.Series(index = chunk.index, data= range(len(chunk)))
+        items = items.loc[timestamps].values
+
         # Go through all horizons
-        for cur in self.model:
-            
+        for modelnumber, cur in enumerate(self.model):
+            horizon = params['models'][modelnumber]
+
             # Put together the features an labels
-            items = np.random.choice(training_indexes, self.model.params['size_minibatches'])
             cur_lstm_input = []
             for item in items:
                 cur_lstm_input.append(lstm_features[item-horizon-params['lstm_horizon']:item-horizon])
-            cur_ann_input = ann_features[items]
-            cur_labels = list(labels[items])
-            
+            cur_ann_input = ann_features[items]            
             
             z = cur['model']
-
-            for j, ds in enumerate(["val", "test"]):
-                results = []
-                for x_batch, _ in next_batch(X, Y, ds):
-                    pred = z.eval({x: x_batch})
-                    results.extend(pred[:, 0])
-                # because we normalized the input data we need to multiply the prediction
-                # with SCALER to get the real values.
-                a[j].plot((Y[ds] * NORMALIZE).flatten(), label=ds + ' raw');
-                a[j].plot(np.array(results) * NORMALIZE, label=ds + ' pred');
-                a[j].legend();
-
-            labelscaler.inverse_transform()
-            forecast 
+            pred = z(cur_ann_input, cur_lstm_input) #z.eval({ann_features: cur_ann_input, lstm_input: cur_lstm_input})
+            forecast[horizon] = self.model.labelscaler.inverse_transform(pred[:, 0])
+        
+        forecast = forecast.transpose()
+        forecast['horizon'] = forecast.index.values * pd.Timedelta('15min')
+        forecast = forecast.set_index('horizon')
         return forecast
 
                     

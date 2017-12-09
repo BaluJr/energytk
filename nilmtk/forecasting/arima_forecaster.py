@@ -102,6 +102,9 @@ class ArimaForecaster(Forecaster):
         verbose: bool
             Whether additional output shall be printed during training.
         '''
+        # Taken from SARIMAX Class
+        #self.model.model_arima = model = ARIMA(endog = learn.values, order=(params['p'],params['d'],params['q']), exog = extData[1:-96])
+        
 
         series = read_csv('shampoo-sales.csv', header=0, parse_dates=[0], index_col=0, squeeze=True, date_parser=parser)
         X = series.values
