@@ -5,7 +5,7 @@ from datetime import datetime
 from nilmtk import plot
 from nilmtk.disaggregate.accelerators import find_steady_states_fast, find_transients_baranskistyle_fast, find_transients_fast, pair_fast, find_sections, myresample_fast, myviterbi_numpy_fast
 from nilmtk import TimeFrame, TimeFrameGroup
-from nilmtk.disaggregate import SupervisedDisaggregator, UnsupervisedDisaggregatorModel
+from nilmtk.disaggregate import UnsupervisedDisaggregator, UnsupervisedDisaggregatorModel
 import numpy as np
 import pandas as pd
 from functools import reduce, partial
@@ -713,6 +713,7 @@ def create_appliances(params):
 
 
 
+
 def _gmm_clustering(events, max_num_clusters=5, exact_cluster=None, dim_scaling = {}, dim_emph = {}):
     '''The core clustering method.
     Does the clustering by using gaussian mixture models.
@@ -762,7 +763,6 @@ def _gmm_clustering(events, max_num_clusters=5, exact_cluster=None, dim_scaling 
             best_bic = cur_bic
             
     return best_gmm, best_gmm.predict(clustering_input)
-
 
 
 def _gmm_confidence_check(X, prediction, clusterer, check_for_variance_dims, return_subclustering_recommendation = False):
@@ -837,7 +837,6 @@ def _gmm_confidence_check(X, prediction, clusterer, check_for_variance_dims, ret
         return confident.astype(bool), subcluster_recommendations
     else:
         return confident.astype(bool)
-
 
 
 def _gmm_clustering_hierarchical(events, name, max_num_clusters=[5,5], check_for_variance_dims = [[],[]], dim_scaling = [{},{}], dim_emph = [{},{}], single_only = True):
@@ -920,7 +919,6 @@ def _gmm_clustering_hierarchical(events, name, max_num_clusters=[5,5], check_for
     return clusterers, subtypes, labels, confidence
 
 
-
 def _gmm_hierarchical_predict_and_confidence_check(name, events, clusterers, check_for_variance_dims=[]):
     '''
     This function does the prediction and the subsequent confidence check.
@@ -978,7 +976,7 @@ def _gmm_hierarchical_predict_and_confidence_check(name, events, clusterers, che
 
 
 
-class EventbasedCombination(SupervisedDisaggregator):
+class EventbasedCombination(UnsupervisedDisaggregator):
     """ This disaggregator is a combination of available event-based disaggregators.
     First fitting flags are combined and the created events are clustered the like Hart does it.
     Then the longer segments are created and observed by a clustering of the flags and a subsequent 
@@ -1000,89 +998,7 @@ class EventbasedCombination(SupervisedDisaggregator):
 
     """ The relate my model """
     model_class = EventbasedCombinationDisaggregatorModel
-
-
-    def Test_My_NILM(self):
-        '''
-        This function tests my NILM by using randomly generated powerflows.
-        '''
-
-        
-        #[segment, appliances] = pckl.load(open('tst_myviterbi.pckl', 'rb'))
-        #labels = myviterbi_numpy(segment, appliances)
-        #labels = myviterbi(segment[['active transition', 'spike']].values, segment['segplace'].values, appliances)
-        #appliances.loc[appliances['section'] == segmentid, "appliance"] = labels
-        #kaputt()
-
-        # Define what has to be simulated
-        duration = 60*60*24*100
-        # Each entry is Means,(transient, spike, duration), StdDevs
-        # Pay attention: No cutting, results must be over event treshold
-        specs =[[((2000, 20, 10), (20, 10, 4)), ((-2000, 10, 15), (10, 3, 4))],                # Heater 1
-                [((1500, 30, 14), (10, 15, 4)), ((-1500, 10, 15), (10, 20, 4))],               # Heater 2
-                [((130, 10, 90), (10, 5, 30)),  ((-130, 10, 600), (10, 6, 100))],              # Fridge
-                [((300, 0, 60*60),(10, 5, 10)), ((-300, 0, 60*60*10),(10, 5, 10))],
-
-                [((40, 0, 50), (6, 1, 10)),      ((120, 0, 40), (15, 1, 10)),    ((-160, 20, 200), (10, 1, 30))],
-                [((100, 0, 40), (10, 5, 10)),     ((-26, 0, 180), (5, 1, 50)),    ((-74,5, 480), (15,1,50))]]
-        # Breaks as appearances, break duration, stddev
-        break_spec = [[4, 60, 10], [6, 10*60,10], [7, 10*60,10], [2, 60,10], [4, 60, 10], [2, 60, 10]]
-        for i, bs in enumerate(break_spec): 
-            bs[0] = bs[0]*len(specs[i])
-
-        # Generate powerflow for each appliance
-        appliances = []
-        debug_num_events = []
-        for i, spec in enumerate(specs):
-            avg_event_duration = sum(map(lambda e: e[0][-1], spec)) + (break_spec[i][0]*60)
-            num_events = duration // avg_event_duration
-            debug_num_events.append(num_events)
-            flags = []
-            for flag_spec in spec:
-                flags.append(np.random.normal(flag_spec[0], flag_spec[1], (num_events, 3)))
-            flags = np.hstack(flags)
-            cumsum = flags[:,:-3:3].cumsum(axis=1) # 2d vorrausgesetzt np.add.accumulate
-            flags[:,:-3:3][cumsum < 5] += 5 - cumsum[cumsum < 5]
-            flags[:,-3] = -flags[:,:-3:3].sum(axis=1) # 2d vorrausgesetzt
-            flags = flags.reshape((-1,3))   
-
-            # Put appliance to the input format
-            appliance = pd.DataFrame(flags, columns=['active transition', 'spike', 'starts'])
-            num_breaks = (len(appliance) // break_spec[i][0])-1
-            breaks = np.random.normal(break_spec[i][1],break_spec[i][2], num_breaks)
-            appliance.loc[break_spec[i][0]:num_breaks*break_spec[i][0]:break_spec[i][0],'starts'] += (breaks * 60)
-            appliance.index = pd.DatetimeIndex(appliance['starts'].clip(5).cumsum()*1e9, tz='utc')
-            appliance['ends'] = appliance.index + pd.Timedelta('6s')
-            appliance.drop(columns=['starts'], inplace=True)
-            appliance.loc[appliance['active transition'] < 0, 'signature'] = appliance['active transition'] - appliance['spike']
-            appliance.loc[appliance['active transition'] >= 0, 'signature'] = appliance['active transition'] + appliance['spike']
-            appliance['original_appliance'] = i
-            appliances.append(appliance)
-        transients = pd.concat(appliances, verify_integrity = True)
-        transients = transients.sort_index()
-        steady_states = transients[['active transition']].cumsum()#.rename({'active transition':'active average'})
-        steady_states[['active transition']] += 60
-        
-        # Separate segments
-        t1 = time.time()
-        transients = add_segments([transients, steady_states, self.model.params['state_threshold'], self.model.params['noise_level']])
-        print('Segment separation: ' + str(time.time() - t1))
-
-        # Create all events which per definition have to belong together
-        t2 = time.time()
-        transient, clusterer = find_appliances([transients, self.model.params['state_threshold']])
-        print("Find appliances: " + str(time.time() - t2))
-
-        # Create the appliances
-        t3 = time.time()
-        input_params, results = [], []
-        for i in range(len(model.transients)):
-            input_params.append((self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance']))
-        appliances, overall_powerflow = create_appliances([self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance']])
-        print("Put together appliance powerflows: " + str(time.time() - t3))
-        
-
-
+ 
 
     def __init__(self, model = None):
         if model == None:
@@ -1091,7 +1007,8 @@ class EventbasedCombination(SupervisedDisaggregator):
         super(EventbasedCombination, self).__init__()
 
 
-    def train(self, metergroup, output_datastore, exact_nilm_datastore = None, tmp_folder = None, **kwargs):
+
+    def disaggregate(self, metergroup, output_datastore, exact_nilm_datastore = None, tmp_folder = None, **kwargs):
         """ Trains and immediatly disaggregates
 
         Parameters
@@ -1120,108 +1037,108 @@ class EventbasedCombination(SupervisedDisaggregator):
         model.clusterer = [{}] * len(metergroup)
         model.overall_powerflow = overall_powerflow = [] 
                 
-        ## 1. Load the events from the powerflow data
-        print('Extract events')
-        t1 = time.time()
-        loader, steady_states_list, transients_list = [], [], []
-        try:
-           self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '.pckl', 'rb'))
-           model.appliances = []
-        except:
-           for i in range(len(metergroup)):
-               overall_powerflow.append(None)
-               steady_states_list.append([])
-               transients_list.append([])
-               loader.append(metergroup.meters[i].load(cols=self.model.params['cols'], chunksize = 31000000, **kwargs))
-           try:
-               while(True):
-                   input_params = []
-                   for i in range(len(metergroup)):
-                       power_dataframe = next(loader[i]).dropna()
-                       if overall_powerflow[i] is None:
-                           overall_powerflow[i] = power_dataframe.resample('5min').agg('mean')
-                       else:
-                           overall_powerflow[i] = \
-                               overall_powerflow[i].append(power_dataframe.resample('5min', how='mean'))
-                       indices = np.array(power_dataframe.index)
-                       values = np.array(power_dataframe.iloc[:,0])
-                       input_params.append((indices, values, model.params['min_n_samples'],
-                                            model.params['state_threshold'], model.params['noise_level']))
-                   states_and_transients = pool.map(find_transients_fast, input_params)
-                   for i in range(len(metergroup)):
-                       steady_states_list[i].append(states_and_transients[i][0])
-                       transients_list[i].append(states_and_transients[i][1])
-           except StopIteration:
-               pass
-           # set model (timezone is lost within c programming)
-           for i in range(len(metergroup)):
-               model.steady_states.append(pd.concat(steady_states_list[i]).tz_localize('utc'))
-               model.transients.append(pd.concat(transients_list[i]).tz_localize('utc'))
-               model.transients[-1].index.rename("starts", inplace = True)
-           if not tmp_folder is None:
-               pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '.pckl', 'wb'))
-        print("Eventloading: " + str(time.time()-t1))
+        ### 1. Load the events from the powerflow data
+        #print('Extract events')
+        #t1 = time.time()
+        #loader, steady_states_list, transients_list = [], [], []
+        #try:
+        #   self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '.pckl', 'rb'))
+        #   model.appliances = []
+        #except:
+        #   for i in range(len(metergroup)):
+        #       overall_powerflow.append(None)
+        #       steady_states_list.append([])
+        #       transients_list.append([])
+        #       loader.append(metergroup.meters[i].load(cols=self.model.params['cols'], chunksize = 31000000, **kwargs))
+        #   try:
+        #       while(True):
+        #           input_params = []
+        #           for i in range(len(metergroup)):
+        #               power_dataframe = next(loader[i]).dropna()
+        #               if overall_powerflow[i] is None:
+        #                   overall_powerflow[i] = power_dataframe.resample('5min').agg('mean')
+        #               else:
+        #                   overall_powerflow[i] = \
+        #                       overall_powerflow[i].append(power_dataframe.resample('5min', how='mean'))
+        #               indices = np.array(power_dataframe.index)
+        #               values = np.array(power_dataframe.iloc[:,0])
+        #               input_params.append((indices, values, model.params['min_n_samples'],
+        #                                    model.params['state_threshold'], model.params['noise_level']))
+        #           states_and_transients = pool.map(find_transients_fast, input_params)
+        #           for i in range(len(metergroup)):
+        #               steady_states_list[i].append(states_and_transients[i][0])
+        #               transients_list[i].append(states_and_transients[i][1])
+        #   except StopIteration:
+        #       pass
+        #   # set model (timezone is lost within c programming)
+        #   for i in range(len(metergroup)):
+        #       model.steady_states.append(pd.concat(steady_states_list[i]).tz_localize('utc'))
+        #       model.transients.append(pd.concat(transients_list[i]).tz_localize('utc'))
+        #       model.transients[-1].index.rename("starts", inplace = True)
+        #   if not tmp_folder is None:
+        #       pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '.pckl', 'wb'))
+        #print("Eventloading: " + str(time.time()-t1))
 
 
-        ## 2. Create separate powerflows with events, shared by multiple phases
-        t1 = time.time()
-        model.transients, model.steady_states = \
-            separate_simultaneous_events(model.transients, model.steady_states, model.params['noise_level'])
-        if not tmp_folder is None:
-            pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'wb'))
-        print('Shared phase separation: ' + str(time.time() - t1))
+        ### 2. Create separate powerflows with events, shared by multiple phases
+        #t1 = time.time()
+        #model.transients, model.steady_states = \
+        #    separate_simultaneous_events(model.transients, model.steady_states, model.params['noise_level'])
+        #if not tmp_folder is None:
+        #    pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'wb'))
+        #print('Shared phase separation: ' + str(time.time() - t1))
 
 
-        ## 3. Separate segments between base load        
-        #self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'rb'))
-        #for i in range(3,6):
-        #    model.steady_states[i] = pd.DataFrame(model.steady_states[i]).rename(columns={'active transition':'active average'})
-        t1 = time.time()
-        input_params = []
-        for i in range(3):#len(model.transients)):
-            input_params.append((self.model.transients[i], self.model.steady_states[i],
-                                 self.model.params['state_threshold'], self.model.params['noise_level']))
-            #self.model.transients[i] = add_segments(input_params[-1])
-        self.model.transients = pool.map(add_segments, input_params)
-        #plot.plot_segments(self.model.transients[0][:1000], self.model.steady_states[0][:1000])
-        print('Segment separation: ' + str(time.time() - t1))
+        ### 3. Separate segments between base load        
+        ##self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'rb'))
+        ##for i in range(3,6):
+        ##    model.steady_states[i] = pd.DataFrame(model.steady_states[i]).rename(columns={'active transition':'active average'})
+        #t1 = time.time()
+        #input_params = []
+        #for i in range(3):#len(model.transients)):
+        #    input_params.append((self.model.transients[i], self.model.steady_states[i],
+        #                         self.model.params['state_threshold'], self.model.params['noise_level']))
+        #    #self.model.transients[i] = add_segments(input_params[-1])
+        #self.model.transients = pool.map(add_segments, input_params)
+        ##plot.plot_segments(self.model.transients[0][:1000], self.model.steady_states[0][:1000])
+        #print('Segment separation: ' + str(time.time() - t1))
         
 
-        ## 4. Create all events which per definition have to belong together (tuned Hart)
-        t2 = time.time()
-        result = []
-        input_params = []
-        for i in range(3):#len(model.transients)):
-            input_params.append((model.transients[i], self.model.params['state_threshold']))
-            #result.append(find_appliances(input_params[-1]))
-        result = pool.map(find_appliances, input_params)
-        for i in range(3):#len(model.transients)):
-            model.transients[i] = result[i]['transients']
-            model.clusterer[i] = result[i]['clusterer']
-        print("Find appliances: " + str(time.time() - t2))
-        if not tmp_folder is None:
-            pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appfound_separated.pckl', 'wb'))
+        ### 4. Create all events which per definition have to belong together (tuned Hart)
+        #t2 = time.time()
+        #result = []
+        #input_params = []
+        #for i in range(3):#len(model.transients)):
+        #    input_params.append((model.transients[i], self.model.params['state_threshold']))
+        #    #result.append(find_appliances(input_params[-1]))
+        #result = pool.map(find_appliances, input_params)
+        #for i in range(3):#len(model.transients)):
+        #    model.transients[i] = result[i]['transients']
+        #    model.clusterer[i] = result[i]['clusterer']
+        #print("Find appliances: " + str(time.time() - t2))
+        #if not tmp_folder is None:
+        #    pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'wb'))
 
 
-        # 5. Create the appliances (Pay attention, id per size and subtype) and rest powerflow
-        #self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appfound_separated.pckl', 'rb')); model.appliances_detailed = []
-        t3 = time.time()
-        input_params, results = [], []
-        for i in range(3):#len(model.transients)):
-            input_params.append((self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance'], exact_nilm_datastore))
-            #results.append(create_appliances(input_params[-1]))
-        results = pool.map(create_appliances, input_params)
-        for i in range(3):#len(model.transients)):
-            model.appliances.append(results[i]['appliances'])
-            model.overall_powerflow[i] = results[i]['overall_powerflow']
-            if exact_nilm_datastore:
-                model.appliances_detailed.append(results[i]['exact_nilm'])
-        print("Put together appliance powerflows: " + str(time.time() - t3))
-        if not tmp_folder is None:
-            pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appcreated_separated.pckl', 'wb'))
+        ## 5. Create the appliances (Pay attention, id per size and subtype) and rest powerflow
+        ##self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'rb')); model.appliances_detailed = []
+        #t3 = time.time()
+        #input_params, results = [], []
+        #for i in range(3):#len(model.transients)):
+        #    input_params.append((self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance'], exact_nilm_datastore))
+        #    #results.append(create_appliances(input_params[-1]))
+        #results = pool.map(create_appliances, input_params)
+        #for i in range(3):#len(model.transients)):
+        #    model.appliances.append(results[i]['appliances'])
+        #    model.overall_powerflow[i] = results[i]['overall_powerflow']
+        #    if exact_nilm_datastore:
+        #        model.appliances_detailed.append(results[i]['exact_nilm'])
+        #print("Put together appliance powerflows: " + str(time.time() - t3))
+        #if not tmp_folder is None:
+        #    pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'wb'))
 
         # 5. Store the results (Not in parallel since writing to same file)
-        #self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appcreated_separated.pckl', 'rb'))
+        self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'rb'))
         print('Store')
         t4 = time.time()
         for phase in range(len(model.transients)):
@@ -1248,8 +1165,7 @@ class EventbasedCombination(SupervisedDisaggregator):
             )
         print("Stored: " + str(time.time()-t4))
 
-    
- 
+
 
     def _save_metadata_for_disaggregation(self, output_datastore, sample_period, measurement, timeframes,
                                           building,meters=None, num_meters=None, supervised=True,
@@ -1424,7 +1340,51 @@ class EventbasedCombination(SupervisedDisaggregator):
    
 
 
+    def disaggregate_single_phase(self, transients, steady_states):
+        '''
+        This function does the disaggregation of a single phase. 
+        It has been mainly created as a test function.
 
+        Parameters
+        ----------
+        transients: pd.DataFrame
+            The steady states of the powerflow as disaggregated from the detected from
+            the powerflow.
+        steady_states: pd.DataFrame
+            The steady states of the powerflow as disaggregated from the detected from
+            the powerflow.
+
+        Returns
+        -------
+        appliances: [pd.DataFrame,...]
+            The succesfully disaggreagated appliances
+        rest: pd.DataFrame
+            The remaining powerflow which could not be assigned to the appliances.
+        '''
+        #[segment, appliances] = pckl.load(open('tst_myviterbi.pckl', 'rb'))
+        #labels = myviterbi_numpy(segment, appliances)
+        #labels = myviterbi(segment[['active transition', 'spike']].values, segment['segplace'].values, appliances)
+        #appliances.loc[appliances['section'] == segmentid, "appliance"] = labels
+        #kaputt()
+
+        # Separate segments
+        t1 = time.time()
+        transients = add_segments([transients, steady_states, self.model.params['state_threshold'], self.model.params['noise_level']])
+        print('Segment separation: ' + str(time.time() - t1))
+
+        # Create all events which per definition have to belong together
+        t2 = time.time()
+        transient, clusterer = find_appliances([transients, self.model.params['state_threshold']])
+        print("Find appliances: " + str(time.time() - t2))
+
+        # Create the appliances
+        t3 = time.time()
+        input_params, results = [], []
+        for i in range(len(model.transients)):
+            input_params.append((self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance']))
+        appliances, overall_powerflow = create_appliances([self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance']])
+        print("Put together appliance powerflows: " + str(time.time() - t3))
+   
 
 
 
@@ -1601,271 +1561,258 @@ class EventbasedCombination(SupervisedDisaggregator):
 
     #region So far unsused 
     
-    def CombiningClustersToFSM():
-        params = self.model['params']
-        #h = len()
-        Q1 = lambda cluster_powers: (cluster_powers.sum().abs()) / cluster_powers.abs().max()
-        Q2 = lambda cluster_power, cluster_content: (cluster_content*cluster_power).sum().abs() / cluster_powers.abs().max()
-        #Q3 = lambda ()
-        Q = params['gamma1'] * Q1(powers) + params['gamma1'] * Q2(powers) + params['gamma1'] * Q3(powers)
 
+    #def disaggregate_chunk(self, chunk, prev, transients, phase):
+    #    """
+    #    Parameters
+    #    ----------
+    #    chunk : pd.DataFrame
+    #        mains power
+    #    prev
+    #    transients : returned by find_steady_state_transients
 
-    def calc_tolerance(self, value, match_target):
-        if (abs(value - match_target)) < self.model.params['large_transition']:
-            matchtol = self.model.params['min_tolerance']
-        else: 
-            matchtol = self.model.params['percent_tolerance'] * max(np.fabs([value, match_target]))
-        return matchtol
+    #    Returns
+    #    -------
+    #    states : pd.DataFrame
+    #        with same index as `chunk`.
+    #    """
+    #    model = self.model
 
+    #    load_kwargs = self._pre_disaggregation_checks(mains, load_kwargs)
+    #    load_kwargs.setdefault('sample_period', 60)
+    #    load_kwargs.setdefault('sections', mains.good_sections())
 
-
-    def disaggregate_chunk(self, chunk, prev, transients, phase):
-        """
-        Parameters
-        ----------
-        chunk : pd.DataFrame
-            mains power
-        prev
-        transients : returned by find_steady_state_transients
-
-        Returns
-        -------
-        states : pd.DataFrame
-            with same index as `chunk`.
-        """
-        model = self.model
-
-        load_kwargs = self._pre_disaggregation_checks(mains, load_kwargs)
-        load_kwargs.setdefault('sample_period', 60)
-        load_kwargs.setdefault('sections', mains.good_sections())
-
-        states = pd.DataFrame(
-            np.NaN, index=chunk.index, columns= model.centroids[phase].index.values)
-        for transient_tuple in transients.itertuples():
+    #    states = pd.DataFrame(
+    #        np.NaN, index=chunk.index, columns= model.centroids[phase].index.values)
+    #    for transient_tuple in transients.itertuples():
             
-            # Transient in chunk
-            if chunk.index[0] < transient_tuple[0] < chunk.index[-1]:
-                # Absolute value of transient
-                abs_value = np.abs(transient_tuple[1:])
-                positive = transient_tuple[1] > 0
-                abs_value_transient_minus_centroid = pd.DataFrame(
-                    (model.centroids[phase] - abs_value).abs())
-                if len(transient_tuple) == 2:
-                    # 1d data
-                    index_least_delta = abs_value_transient_minus_centroid.idxmin().values[0]
-                    value_delta = abs_value_transient_minus_centroid.iloc[index_least_delta].values[0]
-                    # Only accept it if it really fits exactly
-                    tolerance = self.calc_tolerance(abs_value[0], model.centroids[phase].iloc[index_least_delta].values[0]) 
-                    if value_delta > tolerance:
-                        continue
+    #        # Transient in chunk
+    #        if chunk.index[0] < transient_tuple[0] < chunk.index[-1]:
+    #            # Absolute value of transient
+    #            abs_value = np.abs(transient_tuple[1:])
+    #            positive = transient_tuple[1] > 0
+    #            abs_value_transient_minus_centroid = pd.DataFrame(
+    #                (model.centroids[phase] - abs_value).abs())
+    #            if len(transient_tuple) == 2:
+    #                # 1d data
+    #                index_least_delta = abs_value_transient_minus_centroid.idxmin().values[0]
+    #                value_delta = abs_value_transient_minus_centroid.iloc[index_least_delta].values[0]
+    #                # Only accept it if it really fits exactly
+    #                tolerance = self.calc_tolerance(abs_value[0], model.centroids[phase].iloc[index_least_delta].values[0]) 
+    #                if value_delta > tolerance:
+    #                    continue
 
-                    # ALSO HIER MUSS ICH SCHAUEN OB ES DURCHLAEUFT. Und sonst koennte ich auch direkt vom Trainieren die Disaggregation nehmen
+    #                # ALSO HIER MUSS ICH SCHAUEN OB ES DURCHLAEUFT. Und sonst koennte ich auch direkt vom Trainieren die Disaggregation nehmen
 
-                else:
-                    # 2d data.
-                    # Need to find absolute value before computing minimum
-                    columns = abs_value_transient_minus_centroid.columns
-                    abs_value_transient_minus_centroid["multidim"] = (
-                        abs_value_transient_minus_centroid[columns[0]] ** 2
-                        +
-                        abs_value_transient_minus_centroid[columns[1]] ** 2)
-                    index_least_delta = (
-                        abs_value_transient_minus_centroid["multidim"].argmin())
-                if positive:
-                    # Turned on
-                    states.loc[transient_tuple[0]][index_least_delta] = model.centroids[phase].ix[index_least_delta].values
-                else:
-                    # Turned off
-                    states.loc[transient_tuple[0]][index_least_delta] = 0
-        #prev = states.iloc[-1].to_dict()
-        states['rest'] = chunk - states.ffill().fillna(0).sum(axis=1)
-        return states.dropna(how='all') #pd.DataFrame(states, index=chunk.index)
-
-
-    def translate_switches_to_power(self, states_chunk):
-        '''
-        This function translates the states into power. The intermedite 
-        steps are not reconstructed, as this does not have to be stored.
-        It will be faster to do this manually after loading.
-        '''
-        model = self.model
-        di = {}
-        ndim = len(model.centroids[phase].columns)
-        for appliance in states_chunk.columns:
-            states_chunk[[appliance]][ states_chunk[[appliance]]==1] = model.centroids[phase].ix[appliance].values
-        return states_chunk
+    #            else:
+    #                # 2d data.
+    #                # Need to find absolute value before computing minimum
+    #                columns = abs_value_transient_minus_centroid.columns
+    #                abs_value_transient_minus_centroid["multidim"] = (
+    #                    abs_value_transient_minus_centroid[columns[0]] ** 2
+    #                    +
+    #                    abs_value_transient_minus_centroid[columns[1]] ** 2)
+    #                index_least_delta = (
+    #                    abs_value_transient_minus_centroid["multidim"].argmin())
+    #            if positive:
+    #                # Turned on
+    #                states.loc[transient_tuple[0]][index_least_delta] = model.centroids[phase].ix[index_least_delta].values
+    #            else:
+    #                # Turned off
+    #                states.loc[transient_tuple[0]][index_least_delta] = 0
+    #    #prev = states.iloc[-1].to_dict()
+    #    states['rest'] = chunk - states.ffill().fillna(0).sum(axis=1)
+    #    return states.dropna(how='all') #pd.DataFrame(states, index=chunk.index)
 
 
-    def assign_power_from_states(self, states_chunk, prev, phase):
-
-        di = {}
-        ndim = len(self.model.centroids[phase].columns)
-        for appliance in states_chunk.columns:
-            values = states_chunk[[appliance]].values.flatten()
-            if ndim == 1:
-                power = np.zeros(len(values), dtype=int)
-            else:
-                power = np.zeros((len(values), 2), dtype=int)
-            # on = False
-            i = 0
-            while i < len(values) - 1:
-                if values[i] == 1:
-                    # print("A", values[i], i)
-                    on = True
-                    i = i + 1
-                    power[i] = self.model.centroids[phase].ix[appliance].values
-                    while values[i] != 0 and i < len(values) - 1:
-                        # print("B", values[i], i)
-                        power[i] = self.model.centroids[phase].ix[appliance].values
-                        i = i + 1
-                elif values[i] == 0:
-                    # print("C", values[i], i)
-                    on = False
-                    i = i + 1
-                    power[i] = 0
-                    while values[i] != 1 and i < len(values) - 1:
-                        # print("D", values[i], i)
-                        if ndim == 1:
-                            power[i] = 0
-                        else:
-                            power[i] = [0, 0]
-                        i = i + 1
-                else:
-                    # print("E", values[i], i)
-                    # Unknown state. If previously we know about this
-                    # appliance's state, we can
-                    # use that. Else, it defaults to 0
-                    if prev[appliance] == -1 or prev[appliance] == 0:
-                        # print("F", values[i], i)
-                        on = False
-                        power[i] = 0
-                        while values[i] != 1 and i < len(values) - 1:
-                            # print("G", values[i], i)
-                            if ndim == 1:
-                                power[i] = 0
-                            else:
-                                power[i] = [0, 0]
-                            i = i + 1
-                    else:
-                        # print("H", values[i], i)
-                        on = True
-                        power[i] = self.model.centroids[phase].ix[appliance].values
-                        while values[i] != 0 and i < len(values) - 1:
-                            # print("I", values[i], i)
-                            power[i] = self.model.centroids[phase].ix[appliance].values
-                            i = i + 1
-
-            di[appliance] = power
-            # print(power.sum())
-        return di
+    #def translate_switches_to_power(self, states_chunk):
+    #    '''
+    #    This function translates the states into power. The intermedite 
+    #    steps are not reconstructed, as this does not have to be stored.
+    #    It will be faster to do this manually after loading.
+    #    '''
+    #    model = self.model
+    #    di = {}
+    #    ndim = len(model.centroids[phase].columns)
+    #    for appliance in states_chunk.columns:
+    #        states_chunk[[appliance]][ states_chunk[[appliance]]==1] = model.centroids[phase].ix[appliance].values
+    #    return states_chunk
 
 
-    def disaggregate(self, mains, output_datastore = None, **load_kwargs):
-        """Disaggregate mains according to the model learnt previously.
+    #def assign_power_from_states(self, states_chunk, prev, phase):
 
-        Parameters
-        ----------
-        mains : nilmtk.ElecMeter or nilmtk.MeterGroup
-        output_datastore : instance of nilmtk.DataStore subclass
-            For storing power predictions from disaggregation algorithm.
-        sample_period : number, optional
-            The desired sample period in seconds.
-        **load_kwargs : key word arguments
-            Passed to `mains.power_series(**kwargs)`
-        """
-        model = self.model
+    #    di = {}
+    #    ndim = len(self.model.centroids[phase].columns)
+    #    for appliance in states_chunk.columns:
+    #        values = states_chunk[[appliance]].values.flatten()
+    #        if ndim == 1:
+    #            power = np.zeros(len(values), dtype=int)
+    #        else:
+    #            power = np.zeros((len(values), 2), dtype=int)
+    #        # on = False
+    #        i = 0
+    #        while i < len(values) - 1:
+    #            if values[i] == 1:
+    #                # print("A", values[i], i)
+    #                on = True
+    #                i = i + 1
+    #                power[i] = self.model.centroids[phase].ix[appliance].values
+    #                while values[i] != 0 and i < len(values) - 1:
+    #                    # print("B", values[i], i)
+    #                    power[i] = self.model.centroids[phase].ix[appliance].values
+    #                    i = i + 1
+    #            elif values[i] == 0:
+    #                # print("C", values[i], i)
+    #                on = False
+    #                i = i + 1
+    #                power[i] = 0
+    #                while values[i] != 1 and i < len(values) - 1:
+    #                    # print("D", values[i], i)
+    #                    if ndim == 1:
+    #                        power[i] = 0
+    #                    else:
+    #                        power[i] = [0, 0]
+    #                    i = i + 1
+    #            else:
+    #                # print("E", values[i], i)
+    #                # Unknown state. If previously we know about this
+    #                # appliance's state, we can
+    #                # use that. Else, it defaults to 0
+    #                if prev[appliance] == -1 or prev[appliance] == 0:
+    #                    # print("F", values[i], i)
+    #                    on = False
+    #                    power[i] = 0
+    #                    while values[i] != 1 and i < len(values) - 1:
+    #                        # print("G", values[i], i)
+    #                        if ndim == 1:
+    #                            power[i] = 0
+    #                        else:
+    #                            power[i] = [0, 0]
+    #                        i = i + 1
+    #                else:
+    #                    # print("H", values[i], i)
+    #                    on = True
+    #                    power[i] = self.model.centroids[phase].ix[appliance].values
+    #                    while values[i] != 0 and i < len(values) - 1:
+    #                        # print("I", values[i], i)
+    #                        power[i] = self.model.centroids[phase].ix[appliance].values
+    #                        i = i + 1
 
-        load_kwargs = self._pre_disaggregation_checks(mains, load_kwargs)
-        load_kwargs.setdefault('sample_period', 60)
-        load_kwargs.setdefault('sections', mains.good_sections())
+    #        di[appliance] = power
+    #        # print(power.sum())
+    #    return di
 
-        timeframes = []
-        #building_path = '/building{}'.format(mains.building())
-        #mains_data_location = building_path + '/elec/meter' + phase
-        data_is_available = False
 
-        transients = []
-        steady_states = []
-        for i in range(len(mains)):
-            s, t = find_steady_states_transients_fast(
-                mains.meters[i], model.params['cols'], noise_level=model.params['noise_level'], state_threshold= model.params['state_threshold'], **load_kwargs)
-            steady_states.append(s.tz_localize('utc'))
-            transients.append(t.tz_localize('utc'))
+    #def disaggregate(self, mains, output_datastore = None, **load_kwargs):
+    #    """Disaggregate mains according to the model learnt previously.
 
-        print('Separate Multiphase Segments')
-        transients = self.separate_simultaneous_events(transients)
+    #    Parameters
+    #    ----------
+    #    mains : nilmtk.ElecMeter or nilmtk.MeterGroup
+    #    output_datastore : instance of nilmtk.DataStore subclass
+    #        For storing power predictions from disaggregation algorithm.
+    #    sample_period : number, optional
+    #        The desired sample period in seconds.
+    #    **load_kwargs : key word arguments
+    #        Passed to `mains.power_series(**kwargs)`
+    #    """
+    #    model = self.model
 
-        # Initially all appliances/meters are in unknown state (denoted by -1)
-        prev = [OrderedDict()] * len(transients)
+    #    load_kwargs = self._pre_disaggregation_checks(mains, load_kwargs)
+    #    load_kwargs.setdefault('sample_period', 60)
+    #    load_kwargs.setdefault('sections', mains.good_sections())
+
+    #    timeframes = []
+    #    #building_path = '/building{}'.format(mains.building())
+    #    #mains_data_location = building_path + '/elec/meter' + phase
+    #    data_is_available = False
+
+    #    transients = []
+    #    steady_states = []
+    #    for i in range(len(mains)):
+    #        s, t = find_steady_states_transients_fast(
+    #            mains.meters[i], model.params['cols'], noise_level=model.params['noise_level'], state_threshold= model.params['state_threshold'], **load_kwargs)
+    #        steady_states.append(s.tz_localize('utc'))
+    #        transients.append(t.tz_localize('utc'))
+
+    #    print('Separate Multiphase Segments')
+    #    transients = self.separate_simultaneous_events(transients)
+
+    #    # Initially all appliances/meters are in unknown state (denoted by -1)
+    #    prev = [OrderedDict()] * len(transients)
         
-        timeframes = []
-        disaggregation_overall = [None] * len(transients)
-        for phase in range(len(transients)):
-            building_path = '/building{}'.format(mains.building()* 10 + phase)
-            mains_data_location = building_path + '/elec/meter1'
+    #    timeframes = []
+    #    disaggregation_overall = [None] * len(transients)
+    #    for phase in range(len(transients)):
+    #        building_path = '/building{}'.format(mains.building()* 10 + phase)
+    #        mains_data_location = building_path + '/elec/meter1'
 
-            learnt_meters = model.centroids[phase].index.values
-            for meter in learnt_meters:
-                prev[phase][meter] = -1
+    #        learnt_meters = model.centroids[phase].index.values
+    #        for meter in learnt_meters:
+    #            prev[phase][meter] = -1
 
-            # Now iterating over mains data and disaggregating chunk by chunk
-            to_load = mains.meters[i] if i < 3 else mains
-            first = True
-            for chunk in to_load.power_series(**load_kwargs):  # HIER MUSS ICH DOCH UEBER DIE EINZELNEN PHASEN LAUFEN!!!
-                # Record metadata
-                if phase == 1: # Only add once
-                    timeframes.append(chunk.timeframe)
-                    measurement = chunk.name # gehe davon aus, dass ueberall gleich
-                power_df = self.disaggregate_chunk(
-                    chunk, prev[phase], transients[phase], phase) # HAT DEN VORTEIL, DASS ICH MICH AUF DIE GUTEN SECTIONS KONZENTRIEREN KANN
-                if first:
-                    #power_df = pd.DataFrame(0, columns=power_df.columns, index = chunk.index[:1]).append(power_df) # Ich gehe davon aus, dass alle werte ankommen
-                    power_df.iloc[0, :] = 0 
-                    first = False
+    #        # Now iterating over mains data and disaggregating chunk by chunk
+    #        to_load = mains.meters[i] if i < 3 else mains
+    #        first = True
+    #        for chunk in to_load.power_series(**load_kwargs):  # HIER MUSS ICH DOCH UEBER DIE EINZELNEN PHASEN LAUFEN!!!
+    #            # Record metadata
+    #            if phase == 1: # Only add once
+    #                timeframes.append(chunk.timeframe)
+    #                measurement = chunk.name # gehe davon aus, dass ueberall gleich
+    #            power_df = self.disaggregate_chunk(
+    #                chunk, prev[phase], transients[phase], phase) # HAT DEN VORTEIL, DASS ICH MICH AUF DIE GUTEN SECTIONS KONZENTRIEREN KANN
+    #            if first:
+    #                #power_df = pd.DataFrame(0, columns=power_df.columns, index = chunk.index[:1]).append(power_df) # Ich gehe davon aus, dass alle werte ankommen
+    #                power_df.iloc[0, :] = 0 
+    #                first = False
 
-                cols = pd.MultiIndex.from_tuples([chunk.name])
+    #            cols = pd.MultiIndex.from_tuples([chunk.name])
 
-                if output_datastore != None:
-                    for meter in learnt_meters:
-                        data_is_available = True
-                        df = power_df[[meter]].dropna()
-                        df.columns = cols
-                        key = '{}/elec/meter{:d}'.format(building_path, meter + 2) # Weil 0 nicht gibt und Meter1 das undiaggregierte ist und 
-                        output_datastore.append(key, df)
-                    df = power_df[['rest']].dropna()
-                    df.columns = cols
-                    output_datastore.append(key=mains_data_location, value= df) #pd.DataFrame(chunk, columns=cols))  # Das Main wird auf Meter 1 gesetzt.
-                else:
-                    if disaggregation_overall is None:
-                        disaggregation_overall = power_df
-                    else:
-                        disaggregation_overall = disaggregation_overall.append(power_df)
-        if output_datastore != None:
-            # Write a very last entry. Then at least start and end set
-            df = pd.DataFrame(0., columns = cols, index = chunk.index[-1:])
-            for phase in range(len(transients)):
-                building_path = '/building{}'.format(mains.building()* 10 + phase)
-                for meter in model.centroids[phase].index.values:
-                    key = '{}/elec/meter{:d}'.format(building_path, meter + 2) # Weil 0 nicht gibt und Meter1 das undiaggregierte ist und 
-                    output_datastore.append(key, df)
-            # Hier muss ich den rest noch setzen noch setzen
-            #output_datastore.append(key, df.rename(columns={0:meter})) Ich gehe davon aus, dass alle Daten rein kommen und ich rest nicht setzen muss
+    #            if output_datastore != None:
+    #                for meter in learnt_meters:
+    #                    data_is_available = True
+    #                    df = power_df[[meter]].dropna()
+    #                    df.columns = cols
+    #                    key = '{}/elec/meter{:d}'.format(building_path, meter + 2) # Weil 0 nicht gibt und Meter1 das undiaggregierte ist und 
+    #                    output_datastore.append(key, df)
+    #                df = power_df[['rest']].dropna()
+    #                df.columns = cols
+    #                output_datastore.append(key=mains_data_location, value= df) #pd.DataFrame(chunk, columns=cols))  # Das Main wird auf Meter 1 gesetzt.
+    #            else:
+    #                if disaggregation_overall is None:
+    #                    disaggregation_overall = power_df
+    #                else:
+    #                    disaggregation_overall = disaggregation_overall.append(power_df)
+    #    if output_datastore != None:
+    #        # Write a very last entry. Then at least start and end set
+    #        df = pd.DataFrame(0., columns = cols, index = chunk.index[-1:])
+    #        for phase in range(len(transients)):
+    #            building_path = '/building{}'.format(mains.building()* 10 + phase)
+    #            for meter in model.centroids[phase].index.values:
+    #                key = '{}/elec/meter{:d}'.format(building_path, meter + 2) # Weil 0 nicht gibt und Meter1 das undiaggregierte ist und 
+    #                output_datastore.append(key, df)
+    #        # Hier muss ich den rest noch setzen noch setzen
+    #        #output_datastore.append(key, df.rename(columns={0:meter})) Ich gehe davon aus, dass alle Daten rein kommen und ich rest nicht setzen muss
 
-            # Then store the metadata
-            num_meters = [len(cur) + 1 for cur in self.model.centroids] # Add one for the rest
-            if data_is_available:
-                self._save_metadata_for_disaggregation(
-                    output_datastore=output_datastore,
-                    sample_period=load_kwargs['sample_period'],
-                    measurement=col,
-                    timeframes=timeframes,
-                    building=mains.building(),
-                    supervised=False,
-                    num_meters = num_meters,
-                    original_building_meta = mains.meters[0].building_metadata
-                )
-        else:
-            return disaggregation_overall
+    #        # Then store the metadata
+    #        num_meters = [len(cur) + 1 for cur in self.model.centroids] # Add one for the rest
+    #        if data_is_available:
+    #            self._save_metadata_for_disaggregation(
+    #                output_datastore=output_datastore,
+    #                sample_period=load_kwargs['sample_period'],
+    #                measurement=col,
+    #                timeframes=timeframes,
+    #                building=mains.building(),
+    #                supervised=False,
+    #                num_meters = num_meters,
+    #                original_building_meta = mains.meters[0].building_metadata
+    #            )
+    #    else:
+    #        return disaggregation_overall
+
+
+
+
 
         # Der NEUE ANSATZ, den ich mir jetzt dovh verkneife
         #    for chunk in mains.meters[phase].power_series(**load_kwargs):
