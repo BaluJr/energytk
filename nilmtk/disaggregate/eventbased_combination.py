@@ -608,7 +608,7 @@ def find_appliances(params):
         for place, concrete_events in rows.groupby('segplace'):
             cur_appliance[place] = EllipticEnvelope().fit(concrete_events[['active transition','spike']])
             infostr += str(cur_appliance[place].location_[0]) + "_"
-        cur_appliance['aaa'] = infostr + "_"
+        cur_appliance['aaa'] = infostr + "(" + str(len(rows) // length) + ")__"
         appliances.append(cur_appliance)
     print("##################### " + str(len(appliances)))
 
