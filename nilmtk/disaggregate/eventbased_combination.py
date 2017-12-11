@@ -2,7 +2,7 @@ from __future__ import print_function, division
 from collections import OrderedDict, deque
 import time
 from datetime import datetime
-from nilmtk import plot
+from nilmtk import plots
 from nilmtk.disaggregate.accelerators import find_steady_states_fast, find_transients_baranskistyle_fast, find_transients_fast, pair_fast, find_sections, myresample_fast, myviterbi_numpy_fast
 from nilmtk import TimeFrame, TimeFrameGroup
 from nilmtk.disaggregate import UnsupervisedDisaggregator, UnsupervisedDisaggregatorModel
@@ -560,17 +560,15 @@ def find_appliances(params):
     allflank = allflank.append(flank)
 
     possible_twoevents = fast_groupby_with_additional_grpfield(allflank)
-    labels, confidence, subtypes =  _gmm_hierarchical_predict_and_confidence_check("2", possible_twoevents, clusterers, ['transition_avg']) 
-    #.predict(possible_twoevents)
-    possible_twoevents['confident'] = confidence #_gmm_confidence_check(possible_twoevents, labels, clusterers['2'], ['transition_avg'])
+    labels, confidence, subtypes =  _gmm_hierarchical_predict_and_confidence_check("2", possible_twoevents, clusterers, ['transition_avg'])
+    possible_twoevents['confident'] = confidence
     possible_twoevents['appliance'] = labels
     possible_twoevents['subtype'] = subtypes
-    #possible_twoevents = possible_twoevents.set_index(['grp'], append=True) #.reset_index().set_index(['segment'])
     allflank = allflank.drop(['appliance','confident', 'subtype'],axis=1).join(possible_twoevents[['appliance', 'confident', 'subtype']], on=["segment",'grp'])
     # Only keep 4 events where both fitted to twoevent
     allflank = allflank.drop(columns=['confident']).join(allflank[['segment','confident']].groupby('segment').all(), on='segment')
     
-    allflank.loc[allflank['confident'],'segmentsize'] = 2  # Really 2-events
+    allflank.loc[allflank['confident'],'segmentsize'] = 2   # Really 2-events
     allflank.loc[~allflank['confident'],'grp'] = -1         # All non confident elements are one 4 group per segment 
     transients = transients.join(allflank[['appliance','segmentsize', 'grp']], rsuffix = '_new')
     transients.update(transients[['appliance_new']].rename(columns={'appliance_new':'appliance'}))
