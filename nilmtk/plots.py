@@ -8,9 +8,9 @@ import numpy as np
 import pandas as pd
 import math
 from warnings import warn
-from .metergroup import MeterGroup
-from .metergroup import iterate_through_submeters_of_two_metergroups
-from .electric import align_two_meters
+#from .metergroup import MeterGroup, iterate_through_submeters_of_two_metergroups
+#from .electric import align_two_meters
+import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
 from nilmtk import TimeFrameGroup
@@ -270,7 +270,6 @@ def plot_multiphase_event(original_powerflows, separated_powerflows, amount_of_e
     fig: matplotlib.figure.Figure
         The newly plotted figure
     '''
-    raise Exception("Not yet fully implemented!")
 
     fig, ax = plt.subplots(figsize=(50,50)) #, tight_layout=True)
 

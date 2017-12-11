@@ -44,7 +44,7 @@ from .metergroup import iterate_through_submeters_of_two_metergroups
 from .electric import align_two_meters
 from .elecmeter import ElecMeterID
 from nilmtk.timeframegroup import TimeFrame, TimeFrameGroup
-from nilmtk import plots, Electric
+from nilmtk import Electric
 import itertools
 import gc
 import pickle as pckl

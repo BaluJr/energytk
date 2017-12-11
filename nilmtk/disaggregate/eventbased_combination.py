@@ -2,7 +2,6 @@ from __future__ import print_function, division
 from collections import OrderedDict, deque
 import time
 from datetime import datetime
-from nilmtk import plots
 from nilmtk.disaggregate.accelerators import find_steady_states_fast, find_transients_baranskistyle_fast, find_transients_fast, pair_fast, find_sections, myresample_fast, myviterbi_numpy_fast
 from nilmtk import TimeFrame, TimeFrameGroup
 from nilmtk.disaggregate import UnsupervisedDisaggregator, UnsupervisedDisaggregatorModel
@@ -16,7 +15,6 @@ from sklearn_pandas import DataFrameMapper
 import pickle as pckl
 from sklearn.metrics import silhouette_score
 from sklearn import mixture
-import matplotlib as mpl
 from scipy import linalg, spatial
 import itertools
 from nilmtk.clustering import CustomGaussianMixture
