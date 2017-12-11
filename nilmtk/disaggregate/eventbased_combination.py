@@ -602,7 +602,7 @@ def find_appliances(params):
     appliances = []
     for (length, subtype, appliance), rows in transients[(transients['segmentsize']<=4) & transients['confident']].groupby(['segmentsize', 'subtype', 'appliance']):        
         cur_appliance = {'length':int(length), 'appliance':appliance, 'subtype': subtype}
-        if len(rows) // length < 5:
+        if len(rows) // length < 5 or length == 4:
             transients[(transients['segmentsize'] == length) & (transients['subtype'] == subtype) & (transients['appliance'] == appliance), 'confident'] = False
         infostr = "__"
         for place, concrete_events in rows.groupby('segplace'):
@@ -1037,105 +1037,105 @@ class EventbasedCombination(UnsupervisedDisaggregator):
         model.clusterer = [{}] * len(metergroup)
         model.overall_powerflow = overall_powerflow = [] 
                 
-        ### 1. Load the events from the powerflow data
-        #print('Extract events')
-        #t1 = time.time()
-        #loader, steady_states_list, transients_list = [], [], []
-        #try:
-        #   self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '.pckl', 'rb'))
-        #   model.appliances = []
-        #except:
-        #   for i in range(len(metergroup)):
-        #       overall_powerflow.append(None)
-        #       steady_states_list.append([])
-        #       transients_list.append([])
-        #       loader.append(metergroup.meters[i].load(cols=self.model.params['cols'], chunksize = 31000000, **kwargs))
-        #   try:
-        #       while(True):
-        #           input_params = []
-        #           for i in range(len(metergroup)):
-        #               power_dataframe = next(loader[i]).dropna()
-        #               if overall_powerflow[i] is None:
-        #                   overall_powerflow[i] = power_dataframe.resample('5min').agg('mean')
-        #               else:
-        #                   overall_powerflow[i] = \
-        #                       overall_powerflow[i].append(power_dataframe.resample('5min', how='mean'))
-        #               indices = np.array(power_dataframe.index)
-        #               values = np.array(power_dataframe.iloc[:,0])
-        #               input_params.append((indices, values, model.params['min_n_samples'],
-        #                                    model.params['state_threshold'], model.params['noise_level']))
-        #           states_and_transients = pool.map(find_transients_fast, input_params)
-        #           for i in range(len(metergroup)):
-        #               steady_states_list[i].append(states_and_transients[i][0])
-        #               transients_list[i].append(states_and_transients[i][1])
-        #   except StopIteration:
-        #       pass
-        #   # set model (timezone is lost within c programming)
-        #   for i in range(len(metergroup)):
-        #       model.steady_states.append(pd.concat(steady_states_list[i]).tz_localize('utc'))
-        #       model.transients.append(pd.concat(transients_list[i]).tz_localize('utc'))
-        #       model.transients[-1].index.rename("starts", inplace = True)
-        #   if not tmp_folder is None:
-        #       pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '.pckl', 'wb'))
-        #print("Eventloading: " + str(time.time()-t1))
+        ## 1. Load the events from the powerflow data
+        print('Extract events')
+        t1 = time.time()
+        loader, steady_states_list, transients_list = [], [], []
+        try:
+          self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '.pckl', 'rb'))
+          model.appliances = []
+        except:
+          for i in range(len(metergroup)):
+              overall_powerflow.append(None)
+              steady_states_list.append([])
+              transients_list.append([])
+              loader.append(metergroup.meters[i].load(cols=self.model.params['cols'], chunksize = 31000000, **kwargs))
+          try:
+              while(True):
+                  input_params = []
+                  for i in range(len(metergroup)):
+                      power_dataframe = next(loader[i]).dropna()
+                      if overall_powerflow[i] is None:
+                          overall_powerflow[i] = power_dataframe.resample('5min').agg('mean')
+                      else:
+                          overall_powerflow[i] = \
+                              overall_powerflow[i].append(power_dataframe.resample('5min', how='mean'))
+                      indices = np.array(power_dataframe.index)
+                      values = np.array(power_dataframe.iloc[:,0])
+                      input_params.append((indices, values, model.params['min_n_samples'],
+                                           model.params['state_threshold'], model.params['noise_level']))
+                  states_and_transients = pool.map(find_transients_fast, input_params)
+                  for i in range(len(metergroup)):
+                      steady_states_list[i].append(states_and_transients[i][0])
+                      transients_list[i].append(states_and_transients[i][1])
+          except StopIteration:
+              pass
+          # set model (timezone is lost within c programming)
+          for i in range(len(metergroup)):
+              model.steady_states.append(pd.concat(steady_states_list[i]).tz_localize('utc'))
+              model.transients.append(pd.concat(transients_list[i]).tz_localize('utc'))
+              model.transients[-1].index.rename("starts", inplace = True)
+          if not tmp_folder is None:
+              pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '.pckl', 'wb'))
+        print("Eventloading: " + str(time.time()-t1))
 
 
-        ### 2. Create separate powerflows with events, shared by multiple phases
-        #t1 = time.time()
-        #model.transients, model.steady_states = \
-        #    separate_simultaneous_events(model.transients, model.steady_states, model.params['noise_level'])
-        #if not tmp_folder is None:
-        #    pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'wb'))
-        #print('Shared phase separation: ' + str(time.time() - t1))
+        ## 2. Create separate powerflows with events, shared by multiple phases
+        t1 = time.time()
+        model.transients, model.steady_states = \
+           separate_simultaneous_events(model.transients, model.steady_states, model.params['noise_level'])
+        if not tmp_folder is None:
+           pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'wb'))
+        print('Shared phase separation: ' + str(time.time() - t1))
 
 
-        ### 3. Separate segments between base load        
-        ##self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'rb'))
-        ##for i in range(3,6):
-        ##    model.steady_states[i] = pd.DataFrame(model.steady_states[i]).rename(columns={'active transition':'active average'})
-        #t1 = time.time()
-        #input_params = []
-        #for i in range(3):#len(model.transients)):
-        #    input_params.append((self.model.transients[i], self.model.steady_states[i],
-        #                         self.model.params['state_threshold'], self.model.params['noise_level']))
-        #    #self.model.transients[i] = add_segments(input_params[-1])
-        #self.model.transients = pool.map(add_segments, input_params)
-        ##plot.plot_segments(self.model.transients[0][:1000], self.model.steady_states[0][:1000])
-        #print('Segment separation: ' + str(time.time() - t1))
+        ## 3. Separate segments between base load
+        #self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'rb'))
+        #for i in range(3,6):
+        #    model.steady_states[i] = pd.DataFrame(model.steady_states[i]).rename(columns={'active transition':'active average'})
+        t1 = time.time()
+        input_params = []
+        for i in range(3):#len(model.transients)):
+           input_params.append((self.model.transients[i], self.model.steady_states[i],
+                                self.model.params['state_threshold'], self.model.params['noise_level']))
+           #self.model.transients[i] = add_segments(input_params[-1])
+        self.model.transients = pool.map(add_segments, input_params)
+        #plot.plot_segments(self.model.transients[0][:1000], self.model.steady_states[0][:1000])
+        print('Segment separation: ' + str(time.time() - t1))
         
 
-        ### 4. Create all events which per definition have to belong together (tuned Hart)
-        #t2 = time.time()
-        #result = []
-        #input_params = []
-        #for i in range(3):#len(model.transients)):
-        #    input_params.append((model.transients[i], self.model.params['state_threshold']))
-        #    #result.append(find_appliances(input_params[-1]))
+        ## 4. Create all events which per definition have to belong together (tuned Hart)
+        t2 = time.time()
+        result = []
+        input_params = []
+        for i in range(3):#len(model.transients)):
+           input_params.append((model.transients[i], self.model.params['state_threshold']))
+           result.append(find_appliances(input_params[-1]))
         #result = pool.map(find_appliances, input_params)
-        #for i in range(3):#len(model.transients)):
-        #    model.transients[i] = result[i]['transients']
-        #    model.clusterer[i] = result[i]['clusterer']
-        #print("Find appliances: " + str(time.time() - t2))
-        #if not tmp_folder is None:
-        #    pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'wb'))
+        for i in range(3):#len(model.transients)):
+           model.transients[i] = result[i]['transients']
+           model.clusterer[i] = result[i]['clusterer']
+        print("Find appliances: " + str(time.time() - t2))
+        if not tmp_folder is None:
+           pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'wb'))
 
 
-        ## 5. Create the appliances (Pay attention, id per size and subtype) and rest powerflow
-        ##self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'rb')); model.appliances_detailed = []
-        #t3 = time.time()
-        #input_params, results = [], []
-        #for i in range(3):#len(model.transients)):
-        #    input_params.append((self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance'], exact_nilm_datastore))
-        #    #results.append(create_appliances(input_params[-1]))
-        #results = pool.map(create_appliances, input_params)
-        #for i in range(3):#len(model.transients)):
-        #    model.appliances.append(results[i]['appliances'])
-        #    model.overall_powerflow[i] = results[i]['overall_powerflow']
-        #    if exact_nilm_datastore:
-        #        model.appliances_detailed.append(results[i]['exact_nilm'])
-        #print("Put together appliance powerflows: " + str(time.time() - t3))
-        #if not tmp_folder is None:
-        #    pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'wb'))
+        # 5. Create the appliances (Pay attention, id per size and subtype) and rest powerflow
+        #self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'rb')); model.appliances_detailed = []
+        t3 = time.time()
+        input_params, results = [], []
+        for i in range(3):#len(model.transients)):
+           input_params.append((self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance'], exact_nilm_datastore))
+           #results.append(create_appliances(input_params[-1]))
+        results = pool.map(create_appliances, input_params)
+        for i in range(3):#len(model.transients)):
+           model.appliances.append(results[i]['appliances'])
+           model.overall_powerflow[i] = results[i]['overall_powerflow']
+           if exact_nilm_datastore:
+               model.appliances_detailed.append(results[i]['exact_nilm'])
+        print("Put together appliance powerflows: " + str(time.time() - t3))
+        if not tmp_folder is None:
+           pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'wb'))
 
         # 5. Store the results (Not in parallel since writing to same file)
         self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'rb'))

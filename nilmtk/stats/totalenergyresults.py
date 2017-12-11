@@ -1,5 +1,6 @@
 from ..results import Results
 from ..measurement import AC_TYPES
+import pandas as pd
 
 class TotalEnergyResults(Results):
     """
@@ -35,8 +36,12 @@ class TotalEnergyResults(Results):
         return {'total_energy': self.to_dict()} #.combined().to_dict()}
 
     def finalize(self):
-        self._data = self._data.sum() #results_obj._data.sum()['active
+        self._data = self._data["active"].sum() #self._columns_with_end_removed()].sum() #results_obj._data.sum()['active
         #return self.combined()
 
     def export_to_cache(self):
-        return self._data#.fillna(0).convert_objects()
+        # Can only store in table when Series.
+        return pd.Series(self._data) #.fillna(0).convert_objects()
+
+    def import_from_cache(self, cached_stat, sections):
+        self._data = cached_stat.loc[0]

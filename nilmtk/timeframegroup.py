@@ -31,7 +31,7 @@ class TimeFrameGroup():
 
     def __init__(self, timeframes=None, starts_and_ends = None):
         if isinstance(timeframes, TimeFrameGroup):
-            self._df = timeframes._df
+            self._df = timeframes._df.copy()
         if isinstance(timeframes, pd.core.indexes.datetimes.DatetimeIndex):
             self._df = timeframes
         elif isinstance(timeframes, pd.DataFrame):
@@ -160,6 +160,9 @@ class TimeFrameGroup():
         other.good_sections():  |---##---####----##-----###-#|
                intersection():  |---##-----##-----------###-#|
         """
+
+        # Hier hat es geknallt als ich Accuracy als Error Metric berechnen wollte. Bei der Assertion
+
         assert isinstance(other, (TimeFrameGroup, list))
         return TimeFrameGroup.intersect_many([self, other])
 
@@ -274,13 +277,20 @@ class TimeFrameGroup():
         # Remove last, which is always created after end of all sections
         results = []
         for cur in [TP, TN, FP, FN]:
-            starts = all_events.index[cur][:-1] 
+            starts = all_events.index[cur]#[:-1]
             ends = cur.shift(1)
             if len(ends > 0):
                 ends[0] = False
             ends = all_events[ends].index
+
+            if len(starts) == 0 or len(ends) == 0:
+                results.append(TimeFrameGroup())
+                continue
+
+            if starts[-1] > ends[-1]:
+                starts = starts[:-1]
             result = pd.DataFrame({'section_start': starts, 'section_end':ends})
-            results.apply(TimeFrameGroup(result).simplify())
+            results.append(TimeFrameGroup(result).simplify())
         return results
 
     def uptime(self):
@@ -292,6 +302,9 @@ class TimeFrameGroup():
         uptime: int
             total timedelta of all timeframes joined together.
         """
+        if self._df.empty:
+            return pd.Timedelta(0)
+
         return (self._df['section_end'] - self._df['section_start']).sum()
 
 

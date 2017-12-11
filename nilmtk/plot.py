@@ -13,6 +13,7 @@ from .metergroup import iterate_through_submeters_of_two_metergroups
 from .electric import align_two_meters
 import matplotlib.pyplot as plt
 import seaborn as sns
+from nilmtk import TimeFrameGroup
 
 
 
@@ -183,7 +184,8 @@ def plot_segments(transitions, steady_states, ax = None):
             
 
 
-def plot_evaluation_assignments(sec_ground_truth, sec_disaggregations, assignments, verbose = False):
+def plot_evaluation_assignments(sec_ground_truth, sec_disaggregations, assignments,
+                                gt_meters = None, timeframe = None, verbose = False):
     '''
     This function plots the assignments of the preassignment during the NILM evaluation.
     The plot has three columns: 
@@ -201,6 +203,11 @@ def plot_evaluation_assignments(sec_ground_truth, sec_disaggregations, assignmen
     assignments: dict(int -> [int])
         A dictionary with its entries mapping from a number of the ground_truth meters to a 
         list of disaggregation meters. This enables the combination of the disaggregation meters.
+    gt_meters: nilmtk.Electric
+        If set, the meters are used to get the captions for the plots
+    timeframe: nilmtk.Timeframe
+        A timeframe for which the plot shall be drawn. If kept None, the whole timeframe
+        of the ground_truth is plotted.
     verbose: bool
         If additional output is generated
     
@@ -211,6 +218,8 @@ def plot_evaluation_assignments(sec_ground_truth, sec_disaggregations, assignmen
     '''
     
     fig = plt.figure(figsize=(50,50)) #, tight_layout=True)
+    if timeframe is None:
+        timeframe = TimeFrameGroup(map(lambda cur: cur.get_timeframe(), sec_ground_truth)).get_timeframe()
     limit = TimeFrameGroup([timeframe])
     overall_length = max([len(sec_ground_truth), len(sec_disaggregations)])
 
@@ -218,38 +227,39 @@ def plot_evaluation_assignments(sec_ground_truth, sec_disaggregations, assignmen
     for i, cur_nonzero in enumerate(sec_disaggregations):
         ax = fig.add_subplot(overall_length,3,1+i*3)
         limited = cur_nonzero.intersection(limit)
+        if verbose:
+            print(str(i) + ": " + str(len(limited._df)))
         limited.plot(ax=ax)
         ax.set_xlim([timeframe.start, timeframe.end])
         plt.setp(ax.get_xticklabels(), visible=False)
         plt.setp(ax.get_yticklabels(), visible=False)
-        if verbose:
-            print(str(i) + ": " + str(len(limited._df)))
 
     # Plot the original load
     for i, cur_nonzero in enumerate(sec_ground_truth):
         ax = fig.add_subplot(overall_length,3,2+i*3)
         limited = cur_nonzero.intersection(limit)
+        if verbose:
+            print(str(i) + ": " + str(len(limited._df)))
         limited.plot(ax=ax)
-        ax.set_title(ground_truth.meters[i].appliances[0].type['type'])
+        if not gt_meters is None:
+            ax.set_title(gt_meters.meters[i].appliances[0].type['type'])
         ax.set_xlim([timeframe.start, timeframe.end])
         plt.setp(ax.get_xticklabels(), visible=False)
         plt.setp(ax.get_yticklabels(), visible=False)
-        if verbose:
-            print(str(i) + ": " + str(len(limited._df)))
-            
+
     # Plot assigned disaggregations right
-    for i in range(len(gt_abovebaseload_sec)):
+    for i in range(len(sec_ground_truth)):
         cur_nonzero = TimeFrameGroup.union_many(map(lambda a: sec_disaggregations[a], assignments[i]))
         ax = fig.add_subplot(overall_length,3,3+i*3)
         limited = cur_nonzero.intersection(limit)
+        if verbose:
+            print(str(i) + ": " + str(len(limited._df)))
         limited.plot(ax=ax)
         ax.set_title(str(assignments[i]))
         ax.set_xlim([timeframe.start, timeframe.end])
         plt.setp(ax.get_xticklabels(), visible=False)
         plt.setp(ax.get_yticklabels(), visible=False)
-        if verbose:
-            print(str(i) + ": " + str(len(limited._df)))
-    
+
     return fig
 
 

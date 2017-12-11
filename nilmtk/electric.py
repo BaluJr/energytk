@@ -150,13 +150,30 @@ class Electric(MeterSeries):
             resample = True
         sample_period = int(round(sample_period))
 
+        if "high_res" in load_kwargs:
+            resample = True
+
         if resample:
             if resample_kwargs is None:
                 resample_kwargs = {}
 
-            def resample_func(df):
-                resample_kwargs['rule'] = '{:d}S'.format(sample_period)
-                return safe_resample(df, **resample_kwargs)
+            if "high_res" in load_kwargs:
+                # The special highres appliances sampling: May replace by more accurate sampling
+                # Look in eventbased_combination.py. Needed if longer periods desired with
+                # sampling rate far lower than the events frequeny.
+                def resample_func(df):
+                    sample_period_str = '{:d}S'.format(sample_period)
+                    new_idx = pd.DatetimeIndex(start=df.timeframe.start, end=df.timeframe.end, freq=sample_period_str)
+                    if df.empty:
+                        # Potentially a bug, since it does not recognize on-sections longer than load_sec
+                        # Ignore for now, but have to solve in the future by keeping it nan and ffill.
+                        return pd.DataFrame(0, index=new_idx, columns=df.columns)
+                    df = df.combine_first(pd.DataFrame(index=new_idx, columns=df.columns))
+                    return df.interpolate().ffill().bfill().asfreq(sample_period_str)
+            else:
+                def resample_func(df):
+                    resample_kwargs['rule'] = '{:d}S'.format(sample_period)
+                    return safe_resample(df, **resample_kwargs)
 
             load_kwargs.setdefault('preprocessing', []).append(
                 Apply(func=resample_func))
@@ -803,35 +820,57 @@ class Electric(MeterSeries):
 
 
 #region GLOBAL SPACE HELP FUNCTIONS
-def align_two_meters(master, slave, func='power_series'):
-    """Returns a generator of 2-column pd.DataFrames.  The first column is from
+def align_two_meters(master, slave, func='power_series', sample_period = None):
+    """ Rename me! Now supports more than two meters.
+    Returns a generator of 2-column pd.DataFrames.  The first column is from
     `master`, the second from `slave`.
 
     Takes the sample rate and good_periods of `master` and applies to `slave`.
 
     Parameters
     ----------
-    master, slave : ElecMeter or MeterGroup instances
+    master:
+        The main meter which defines frequency and area to query.
+    slave :
+        ElecMeter or MeterGroup instances
+        (can be also a list, then there is an dedicated
+        entry in the disctionary for each slave.)
+    sample_period: int
+        Sample period in seconds.
+
+    Returns:
+        aligned_series: pd.DataFrame
+        One column for the Master and one column per Slave
+        Has the columns "Master", "Slave"
+        or for list of slaves:
+        {"Master", 1, 2, ...}
     """
-    sample_period = master.sample_period()
+    if sample_period is None:
+        sample_period = master.sample_period()
+
     period_alias = '{:d}S'.format(sample_period)
     sections = master.good_sections()
-    master_generator = getattr(master, func)(sections=sections)
+    master_generator = getattr(master, func)(sections=sections, sample_period = sample_period)
     for master_chunk in master_generator:
         if len(master_chunk) < 2:
             return
-        chunk_timeframe = TimeFrame(master_chunk.index[0],
-                                    master_chunk.index[-1])
-        slave_generator = getattr(slave, func)(sections=[chunk_timeframe])
-        slave_chunk = next(slave_generator)
+        chunk_timeframe = TimeFrame(master_chunk.index[0], master_chunk.index[-1])
 
-        # TODO: do this resampling in the pipeline?
-        slave_chunk = slave_chunk.resample(period_alias)
-        if slave_chunk.empty:
-            continue
-        master_chunk = master_chunk.resample(period_alias)
-
-        yield pd.DataFrame({'master': master_chunk, 'slave': slave_chunk})
+        if not type(slave) is list:
+            slave_generator = getattr(slave, func)(sections=[chunk_timeframe], sample_period = sample_period)
+            slave_chunk = next(slave_generator)
+            # TODO: do this resampling in the pipeline? Yes!? Why not! I do so and additionally added highres. meters! :)
+            #slave_chunk = slave_chunk.resample(period_alias)
+            #if slave_chunk.empty:
+            #    continue
+            #master_chunk = master_chunk.resample(period_alias)
+            yield pd.DataFrame({'master': master_chunk, 'slave': slave_chunk})
+        else:
+            data = {"master": master_chunk}
+            for i, cur_slave in enumerate(slave):
+                slave_generator = getattr(cur_slave, func)(sections=[chunk_timeframe], sample_period = sample_period)
+                data[i] = next(slave_generator)
+            yield pd.DataFrame(data = data)
 
 
 def activation_series_for_chunk(*args, **load_kwargs):

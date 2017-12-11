@@ -934,6 +934,8 @@ class MeterGroup(Electric):
                 else:
                     total_energy_results += meter_energy
             return total_energy_results
+        else:
+            return 0
 
     def _collect_stats_on_all_meters(self, load_kwargs, func, full_results):
         '''
@@ -995,27 +997,31 @@ class MeterGroup(Electric):
                                " cannot be unified.")
 
     def good_sections(self, **load_kwargs):
-        """Returns good sections for just the first meter.
-
-        TODO: combine good sections from every meter.
+        """Returns the intersection of the good sections of all
+        contained meters.
         """
         if self.meters:
-            if len(self.meters) > 1:
-                warn("As a quick implementation we only get Good Sections from"
-                     " the first meter in the meter group.  We should really"
-                     " return the intersection of the good sections for all"
-                     " meters.  This will be fixed...")
-            
-            #raise("Klappt das wirklich?")
             good_sections = [TimeFrameGroup([self.get_timeframe()])]
             for meter in self.meters:
                 good_sections.append(meter.good_sections())
             good_sections = TimeFrameGroup.intersect_many(good_sections)
             return good_sections
-            #return self.meters[0].good_sections(**load_kwargs)
         else:
             return TimeFrameGroup()
 
+    def overbasepower_sections(self, **load_kwargs):
+        """Returns union of overbaseload sections for all contained meters.
+        So the overall sections above baseload.
+
+        """
+        if self.meters:
+            abovebaseload_sections = [TimeFrameGroup([self.get_timeframe()])]
+            for meter in self.meters:
+                abovebaseload_sections.append(meter.overbasepower_sections())
+            abovebaseload_sections = TimeFrameGroup.union_many(abovebaseload_sections)
+            return abovebaseload_sections
+        else:
+            return TimeFrameGroup()
 
     def dataframe_of_meters(self, **load_kwargs):
         """
@@ -1897,8 +1903,6 @@ def combine_chunks_from_generators(index, columns, meters, load_kwargs):
     cumulator_arr = cumulator.as_matrix()
     columns_to_average_counter = pd.DataFrame(dtype=np.uint16)
     timeframe = None
-
-    # ALSO HIER MUSS ICH SCHAUEN WARUM NAN entsteht. Der index passt irgendwie nicht zum Chunk!??? 
 
     # Go through each generator to try sum values together
     for meter in meters:

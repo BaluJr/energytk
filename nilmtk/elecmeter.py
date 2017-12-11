@@ -28,6 +28,18 @@ class ElecMeter(Hashable, Electric):
 
     """Represents a physical electricity meter.
 
+    Todo: I have to formalize it further. I defined meters with a sampling_rate of 0.
+    In this case, which is used for disaggregation of state_machines, the storing
+    takes place by storing only the changes instead of the continuous powerflow. This
+    allows a far more efficient storing. If no sampling_rate is given, they are
+    returned as 1 sec (In the future one should additionally store a native sampling rate
+    which sould be set to the rate which is recommenden. Eg. based on the meter, which
+    was used to create the highres meter.)
+    One remaining problem for the high_res meters: Only the nonzero sections are loaded and
+    therefore handed in to the interpolator. Therefore the loaded section does not necessarily
+    has to contain the full intervall. As a result one has to ffill and bfill the whole
+    timeframe.
+
     Attributes
     ----------
     appliances : list of Appliance objects connected immediately downstream
@@ -465,6 +477,9 @@ class ElecMeter(Hashable, Electric):
 
         if 'sample_period' in load_kwargs:
             load_kwargs.setdefault('resample', True)
+
+        if self.sample_period() == 0:
+            load_kwargs["high_res"] = True
 
         if load_kwargs.get('resample'):
             # Set default key word arguments for resampling.
