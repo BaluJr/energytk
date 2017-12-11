@@ -52,50 +52,6 @@ import matplotlib.pyplot as plt
 import sklearn.metrics
 
 
-'''
-This array contains all information about the available metrics.
-This comprises:
-- lbl:      Human readable name of the metric used as caption in plots
-- fn:       Reference to the function implementing the metric
-- better:   Whether a higher or lower value is better (1 = higher, -1 = lower)
-'''
-metrics_dictionary = {
-    'A_AssignedEnergy':
-        {'lbl': "Delta Assigned Energy", 'fn':error_in_assigned_energy, 'better':-1, "usecase":["all", "one"]},
-    'B_PercentageAssignedEnergy':
-        {'lbl': "Delta Assigned Energy [%]", 'fn':percetage_of_assigned_energy, 'better':-1, "usecase":["all", "one"]},
-    'C_DeviationOfAssignedEnergy':
-        {'lbl': "Deviation Assigned Energy", 'fn': deviation_of_assigned_energy, 'better':-1, "usecase":["all", "one"]},
-
-    'D_RMSE':
-        {'lbl': "RMSE", 'fn': rms_error_power, 'better':-1, "usecase":["all", "one"]},
-    'E_MAE':
-        {'lbl': "MAE", 'fn': mae, 'better':-1, "usecase":["all", "one"]},
-    'F_MNE':
-        {'lbl': "Mean Normalized Error", 'fn': mean_normalized_error_power, 'better':-1, "usecase":["all", "one"]},
-
-    'G_Precision':
-        {'lbl': "Precision", 'fn': precision, 'better': 1, "usecase":["all", "one"]},
-    'H_Recall':
-        {'lbl': "Recall", 'fn': recall, 'better': 1, "usecase":["all", "one"]},
-    'I_F1':
-        {'lbl': "F1-Score", 'fn': f1_score, 'better': 1, "usecase":["all", "one"]},
-    'Accuracy':
-        {'lbl': "Accuracy", 'fn': accuracy, 'better': 1},
-    'MCC':
-        {'lbl': "MCC", 'fn': mcc, 'better': 1, "usecase":["all", "one"]},
-
-    'J_TotalEnergyCorrectlyAssigned':
-        {'lbl': "Correctly Assigned Energy", 'fn': total_energy_correctly_assigned, 'better': 1, "usecase":["all"]},
-    "K":
-        {'lbl': "", 'fn': disaggregation_error, 'better': 1, "usecase":["all"]},
-    #"MAPE":
-    #    {'lbl': "MAPE", 'fn': mape},
-    #"NRSME":
-    #    {'lbl': "NRSME", 'fn' : nrmse},
-    }
-
-
 
 ##################################
 # Error metrics from disaggregation point of view
@@ -504,62 +460,11 @@ def mcc(pred_meter, ground_truth_meter, good_sections = None, etype = ("power","
 # From here on there are only metrics which give one single value for the
 # overall disaggregation.
 
-
-# Errors in both (assignment AND amount of energy)
-def total_energy_correctly_assigned(prediction, ground_truth, tolerance = 0, etype = ("power","active")):
-    """ J) TECA
-
-    Parameters
-    ----------
-    prediction: MeterGroup
-        The result of the disaggregation
-    ground_truth: MeterGroup
-        The original appliances recorded by plugs and included within the 
-        source dataset.
-    """
-
-    assigned_metegroups = _pre_matching(prediction, ground_truth, "mcc")
-    overall_error = 0
-    overall_gt_power = 0
-    for gt, pred in zip(ground_truth.meters, assigned_metegroups):
-        for aligned_meters_chunk in align_two_meters(gt, pred, sample_period=10):  # gt is master
-            diff = aligned_meters_chunk['master'] - aligned_meters_chunk['slave']
-            diff.dropna(inplace=True)
-            overall_error += diff.abs().sum()
-            overall_gt_power += aligned_meters_chunk['master'].sum()
-    return 1 - overall_error / (2 * overall_gt_power)
-
-
-
-def disaggregation_error(prediction, ground_truth):
-    """ K) DE
-
-    Parameters
-    ----------
-    prediction: MeterGroup
-        The result of the disaggregation
-    ground_truth: MeterGroup
-        The original appliances recorded by plugs and included within the
-        source dataset.
-    """
-
-    assigned_metegroups = _pre_matching(prediction, ground_truth, "mcc")
-    overall_error = 0
-    for gt, pred in zip(ground_truth.meters, assigned_metegroups):
-        for aligned_meters_chunk in align_two_meters(gt, pred, sample_period=10):  # gt is master
-            diff = aligned_meters_chunk['master'] - aligned_meters_chunk['slave']
-            diff.dropna(inplace=True)
-            overall_error += (diff.abs()**2).sum()
-    return overall_error / 2
-
-
-
-
-# Meta functions
 def _pre_matching(prediction, ground_truth, metric, verbose = False):
     """
     This help function matches the disaggregated appliances together using the given metric.
-    The chosen metric should be a fast one like MCC.
+    The chosen metric should be a fast one like MCC which operates on the whole powerflows
+    at once by using the TimeFrameGroups.
 
     Parameters
     ----------
@@ -630,6 +535,103 @@ def _pre_matching(prediction, ground_truth, metric, verbose = False):
         assigned_metegroups.append(MeterGroup(cur))
     return assigned_metegroups
 
+
+
+# Errors in both (assignment AND amount of energy)
+def total_energy_correctly_assigned(prediction, ground_truth, tolerance = 0, etype = ("power","active")):
+    """ J) TECA
+
+    Parameters
+    ----------
+    prediction: MeterGroup
+        The result of the disaggregation
+    ground_truth: MeterGroup
+        The original appliances recorded by plugs and included within the 
+        source dataset.
+    """
+
+    assigned_metegroups = _pre_matching(prediction, ground_truth, "mcc")
+    overall_error = 0
+    overall_gt_power = 0
+    for gt, pred in zip(ground_truth.meters, assigned_metegroups):
+        for aligned_meters_chunk in align_two_meters(gt, pred, sample_period=10):  # gt is master
+            diff = aligned_meters_chunk['master'] - aligned_meters_chunk['slave']
+            diff.dropna(inplace=True)
+            overall_error += diff.abs().sum()
+            overall_gt_power += aligned_meters_chunk['master'].sum()
+    return 1 - overall_error / (2 * overall_gt_power)
+
+
+
+def disaggregation_error(prediction, ground_truth):
+    """ K) DE
+
+    Parameters
+    ----------
+    prediction: MeterGroup
+        The result of the disaggregation
+    ground_truth: MeterGroup
+        The original appliances recorded by plugs and included within the
+        source dataset.
+    """
+
+    assigned_metegroups = _pre_matching(prediction, ground_truth, "mcc")
+    overall_error = 0
+    for gt, pred in zip(ground_truth.meters, assigned_metegroups):
+        for aligned_meters_chunk in align_two_meters(gt, pred, sample_period=10):  # gt is master
+            diff = aligned_meters_chunk['master'] - aligned_meters_chunk['slave']
+            diff.dropna(inplace=True)
+            overall_error += (diff.abs()**2).sum()
+    return overall_error / 2
+
+
+
+# Meta functions
+
+'''
+This array contains all information about the available metrics.
+This comprises:
+- lbl:      Human readable name of the metric used as caption in plots
+- fn:       Reference to the function implementing the metric
+- better:   Whether a higher or lower value is better (1 = higher, -1 = lower)
+'''
+metrics_dictionary = {
+    'A_AssignedEnergy':
+        {'lbl': "Delta Assigned Energy", 'fn':error_in_assigned_energy, 'better':-1, "usecase":["all", "one"]},
+    'B_PercentageAssignedEnergy':
+        {'lbl': "Delta Assigned Energy [%]", 'fn':percetage_of_assigned_energy, 'better':-1, "usecase":["all", "one"]},
+    'C_DeviationOfAssignedEnergy':
+        {'lbl': "Deviation Assigned Energy", 'fn': deviation_of_assigned_energy, 'better':-1, "usecase":["all", "one"]},
+
+    'D_RMSE':
+        {'lbl': "RMSE", 'fn': rms_error_power, 'better':-1, "usecase":["all", "one"]},
+    'E_MAE':
+        {'lbl': "MAE", 'fn': mae, 'better':-1, "usecase":["all", "one"]},
+    'F_MNE':
+        {'lbl': "Mean Normalized Error", 'fn': mean_normalized_error_power, 'better':-1, "usecase":["all", "one"]},
+
+    'G_Precision':
+        {'lbl': "Precision", 'fn': precision, 'better': 1, "usecase":["all", "one"]},
+    'H_Recall':
+        {'lbl': "Recall", 'fn': recall, 'better': 1, "usecase":["all", "one"]},
+    'I_F1':
+        {'lbl': "F1-Score", 'fn': f1_score, 'better': 1, "usecase":["all", "one"]},
+    'Accuracy':
+        {'lbl': "Accuracy", 'fn': accuracy, 'better': 1},
+    'MCC':
+        {'lbl': "MCC", 'fn': mcc, 'better': 1, "usecase":["all", "one"]},
+
+    'J_TotalEnergyCorrectlyAssigned':
+        {'lbl': "Correctly Assigned Energy", 'fn': total_energy_correctly_assigned, 'better': 1, "usecase":["all"]},
+    "K":
+        {'lbl': "", 'fn': disaggregation_error, 'better': 1, "usecase":["all"]},
+
+    # The following errors are currently not yet included into the
+    #"MAPE":
+    #    {'lbl': "MAPE", 'fn': mape},
+    #"NRSME":
+    #    {'lbl': "NRSME", 'fn' : nrmse},
+    }
 
 
 
