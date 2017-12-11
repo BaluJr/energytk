@@ -373,19 +373,32 @@ class TimeFrameGroup():
 
 
 
-    def remove_before(self, start):
-        ''' Removes all sections before start.
-        Truncates the first segment if it is cut by
-        start.
+    def truncate(self, timeframe = None, start = None, end = None, ):
+        ''' Removes all sections outside the given section.
+        The input can be either a timeframe of start and end.
 
         Paramter
         --------
+        timeframe: nilmtk.TimeFrame
+            If set, the timeframegroup is limited to this timeframe
         start: pd.TimeStamp
             The timestamp before which all segments are removed.
+        end: pd.TimeStamp
+            The timestamp after which all segments are removed.
         '''
-        self._df  = self._df[self._df["section_end"] > start]
-        self._df[self._df["section_start"] < start]["section_start"] = start
+        mystart, myend = start, end
+        if start == None and not timeframe is None:
+            mystart = timeframe.start
+        if end == None and not timeframe is None:
+            myend = timeframe.end
 
+        # Cut front
+        self._df  = self._df[self._df["section_end"] > start]
+        self._df.loc[self._df["section_start"] < start,"section_start"] = start
+
+        # Cut end
+        self._df  = self._df[self._df["section_start"] < end]
+        self._df.loc[self._df["section_end"] > end,"section_end"] = end
 
 
     def invert(self, start = None, end = None):
