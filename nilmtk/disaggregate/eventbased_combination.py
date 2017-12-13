@@ -19,6 +19,9 @@ from scipy import linalg, spatial
 import itertools
 from nilmtk.clustering import CustomGaussianMixture
 from sklearn.covariance import EmpiricalCovariance, MinCovDet, EllipticEnvelope
+import copy
+import nilmtk.plots
+import pickle
 
 # Fix the seed for repeatability of experiments
 SEED = 42
@@ -88,7 +91,10 @@ class EventbasedCombinationDisaggregatorModel(UnsupervisedDisaggregatorModel):
 
         # The sample period, in seconds, used for both the
         # mains and the disaggregated appliance estimates.
-        'sample_period':120,    
+        'sample_period':120,
+
+        # The frequency of the low res data
+        "downsampled_resolution": "5min"
     }
     
 
@@ -386,6 +392,10 @@ def separate_simultaneous_events(transients, steady_states, noise_level):
         DataFrames and added to separate new DataFrames.
     '''
 
+    plotting = True
+    if plotting:
+        original_transients = copy.deepcopy(transients)
+        interesting_sections = []
     # When only one powerflow, no simultaneous events
     if len(transients) <= 1:
         return
@@ -442,7 +452,9 @@ def separate_simultaneous_events(transients, steady_states, noise_level):
                 steady_states[i].drop(cur.index, inplace = True)
                 transients[i].drop(cur.index, inplace = True)
                 transients[i].loc[invalids,'active transition'] = steady_states[i].loc[invalids,'active average'] - steady_states[i].shift(1).loc[invalids,'active average']
-                    
+
+                if plotting:
+                    interesting_sections.append(TimeFrame(fst,lst))
         # Create the new events 
         common_transients = pd.concat(confident_common_transients, axis=1)
         if len(common_transients) == 0:
@@ -463,16 +475,19 @@ def separate_simultaneous_events(transients, steady_states, noise_level):
         new_states.rename(columns={'active transition':'active average'}, inplace = True)
         new_steady_states.append(new_states)
 
-    # Reset the new results
+    if plotting:
+        nilmtk.plots.plot_multiphase_event(original_transients, transients, new_transients, interesting_sections[0])
+
+    # Put together the new results
     transients.extend(new_transients)
-    steady_states.extend(new_steady_states)        
+    steady_states.extend(new_steady_states)
+
     return transients, steady_states
 
 
 
 def find_appliances(params):
     ''' Assign labels to the transients, defining the appliances they belong to.
-    
 
     Paramters
     ---------
@@ -501,11 +516,12 @@ def find_appliances(params):
     twoevents = fast_groupby(twoevents)
     new_clusterers, subtypes, labels, confidences = \
         _gmm_clustering_hierarchical(twoevents, "2", max_num_clusters = [6, 4], dim_scaling = {'transition_avg':3},
-                                     check_for_variance_dims=['transition_avg'], single_only=False)
+                                     check_for_variance_dims=['transition_avg'], single_only=True)
     clusterers = {**clusterers, **new_clusterers}
     twoevents['confident'] = confidences
     twoevents['appliance'] = labels
     twoevents['subtype'] = subtypes
+    #nilmtk.plots.plot_clustering(clusterers, twoevents, ["transition_avg", "spike_up"], s=0.1)
     transients = transients.join(twoevents[['appliance', 'confident', 'subtype']], on="segment")
     transients['appliance'] = transients['appliance'].fillna(-1)
     transients['confident'] = transients['confident'].fillna(0).astype(bool)
@@ -589,14 +605,16 @@ def find_appliances(params):
         rest_fourevents.loc[rest_fourevents['subtype'] == type, 'appliance'] = labels
         rest_fourevents.loc[rest_fourevents['subtype'] == type, 'subtype'] = subtypes
     transients = transients.join(rest_fourevents[['appliance', 'subtype', 'confident']], on="segment", rsuffix="four")
-    transients.update(transients[['appliancefour',  'subtypefour', 'confidentfour']].rename(columns={'appliancefour':'appliance', 'subtypefour':'subtype', 'confidentfour':'confident'}))
+    transients.update(transients[['appliancefour',  'subtypefour', 'confidentfour']].rename(
+        columns={'appliancefour':'appliance', 'subtypefour':'subtype', 'confidentfour':'confident'}))
     transients.drop(["appliancefour", 'subtypefour', 'confidentfour'],axis=1, inplace = True)
 
 
     # Build identified appliances (outlier detections for the events of the appliances, and remove too small)
     transients['segplace'] = transients.groupby(['segment', 'grp']).cumcount()
     appliances = []
-    for (length, subtype, appliance), rows in transients[(transients['segmentsize']<=4) & transients['confident']].groupby(['segmentsize', 'subtype', 'appliance']):        
+    for (length, subtype, appliance), rows in transients[(transients['segmentsize']<=4)
+            & transients['confident']].groupby(['segmentsize', 'subtype', 'appliance']):
         cur_appliance = {'length':int(length), 'appliance':appliance, 'subtype': subtype}
         if len(rows) // length < 5 or length == 4:
             transients[(transients['segmentsize'] == length) & (transients['subtype'] == subtype) & (transients['appliance'] == appliance), 'confident'] = False
@@ -716,13 +734,13 @@ def _gmm_clustering(events, max_num_clusters=5, exact_cluster=None, dim_scaling 
 
     Paramters
     ---------
-    dim_scaling: 
+    dim_scaling:
         Scaling of certain dimensions of the input. Won't affect GMM but the k-means initialization.
-    dim_emph: 
-        Increase importance of certain dimensions during E-step of EM-algorithm. All other dimensions' 
+    dim_emph:
+        Increase importance of certain dimensions during E-step of EM-algorithm. All other dimensions'
         covariances are scaled by this value.
     '''
-    
+
     # Special case:
     if len(events) < 20: # len(events.columns):
         return None, (np.ones(len(events))*-1)
@@ -730,7 +748,7 @@ def _gmm_clustering(events, max_num_clusters=5, exact_cluster=None, dim_scaling 
     # Preprocess dataframe
     mapper = DataFrameMapper([(column, None) for column in events.columns])
     clustering_input = mapper.fit_transform(events.copy())
-    
+
     # Find scaling dimensions (makes a difference for kmeans-init)
     scaling_dims = list(dim_emph.keys())
     indices = np.in1d(events.columns, scaling_dims)
@@ -750,26 +768,26 @@ def _gmm_clustering(events, max_num_clusters=5, exact_cluster=None, dim_scaling 
     best_gmm = CustomGaussianMixture(n_components=1, covariance_type='full', n_init = 5, dim_emph = dim_emph)
     best_gmm.fit(clustering_input)
     best_bic = best_gmm.bic(clustering_input)
-    for n_clusters in range(2, max_num_clusters):   
+    for n_clusters in range(2, max_num_clusters):
         gmm = CustomGaussianMixture(n_components=n_clusters, covariance_type='full', n_init = 5, dim_emph = dim_emph)
         gmm.fit(clustering_input)
         cur_bic = gmm.bic(clustering_input)
         if cur_bic < best_bic:
             best_gmm = gmm
             best_bic = cur_bic
-            
+
     return best_gmm, best_gmm.predict(clustering_input)
 
 
 def _gmm_confidence_check(X, prediction, clusterer, check_for_variance_dims, return_subclustering_recommendation = False):
     ''' Checks whether we can be sure about the assignment of an event.
-    
+
     The following checks are performed:
-    - 1. When the cluster has a too large StdDev 
-    - 2. When the cluster is too small checks whether the points X, Y lie in the 
-    - 3. If probability is lower than 80% 
+    - 1. When the cluster has a too large StdDev
+    - 2. When the cluster is too small checks whether the points X, Y lie in the
+    - 3. If probability is lower than 80%
     - 4. If the event is higher than 80% but lies outside the 3 sigma confidence intervall of the gmm distribution.
-    
+
 
     Parameters
     ----------
@@ -812,7 +830,7 @@ def _gmm_confidence_check(X, prediction, clusterer, check_for_variance_dims, ret
         if ((stddevs > 0.3 * means) & (stddevs > 10)).any() and not ((stddevs < 0.01 * means).any()):
             subcluster_recommendations.append(i)
             continue
-        
+
         # 2. Exclude too small clusters!
         if (not i in counts) or (counts[i] < 0.1 * avg_clustersize) or (counts[i] < 5):
             continue
@@ -820,11 +838,11 @@ def _gmm_confidence_check(X, prediction, clusterer, check_for_variance_dims, ret
         # Take points of current cluster
         cur = (prediction == i)
         cur_X = X[cur].values
-        
-        # 3. Check for confidence by the probability 
+
+        # 3. Check for confidence by the probability
         probas = clusterer.predict_proba(cur_X)
         confident[cur] = probas.max(axis=1) > 0.9
-        
+
         # 4. If not 90% sure, take at least the ones inside the one sigma environment
         confident[cur] |= \
             (spatial.distance.cdist(cur_X, np.expand_dims(mean, 0), 'mahalanobis', VI=linalg.inv(covar)) < 1).squeeze()
@@ -840,7 +858,7 @@ def _gmm_clustering_hierarchical(events, name, max_num_clusters=[5,5], check_for
     This function does the clustering in a hierarchical way.
     That means, that too large clusters of the first step are again clustered.
     All paramters contain multiple two inputs. For the first and the second clustering step.
-    
+
     Parameters
     ----------
     events: pd.DataFrame
@@ -848,13 +866,13 @@ def _gmm_clustering_hierarchical(events, name, max_num_clusters=[5,5], check_for
     name: string
         The name of the cluster to build. Namely its size ("2", "3", "4")
     max_num_clusters: [int, int]
-        The mount 
+        The mount
     check_for_variance_dims: list
         The given columns are considered to exclude a cluster because of too high variance
-    dim_scaling = [float, float] 
-        Scales a certain dimension in a preprocessing step. This does not include GMM but the results of 
+    dim_scaling = [float, float]
+        Scales a certain dimension in a preprocessing step. This does not include GMM but the results of
         the K-means which is used to find the starting values for Gmm
-    dim_emph = [{},{}], 
+    dim_emph = [{},{}],
         Emphasizes a certain dimension of the clustering of appliances. This is done by scaling the covariance
         of the GMM's EM-algorthms.
     single_only: bool
@@ -893,9 +911,9 @@ def _gmm_clustering_hierarchical(events, name, max_num_clusters=[5,5], check_for
     confidence, subclustering = \
         _gmm_confidence_check(events, labels, clusterer, check_for_variance_dims=check_for_variance_dims[0],
                               return_subclustering_recommendation=True)
-    
+
     # Second round of clustering if not removed
-    if single_only:
+    if not single_only:
         for mastercluster in subclustering:
             sub_name = name + "_" + str(mastercluster)
             cur_cluster = (labels == mastercluster)
@@ -919,7 +937,7 @@ def _gmm_hierarchical_predict_and_confidence_check(name, events, clusterers, che
     '''
     This function does the prediction and the subsequent confidence check.
     Used for the twoevents inside the fourevents.
-    
+
     Parameters
     ----------
     name: string
@@ -930,7 +948,7 @@ def _gmm_hierarchical_predict_and_confidence_check(name, events, clusterers, che
         Dictionary mapping from a subtype to a clusterer
     check_for_variance_dims: list
         The given columns are considered to exclude a cluster because of too high variance
-    
+
     Returns
     -------
      labels: np.array<int>
@@ -944,7 +962,7 @@ def _gmm_hierarchical_predict_and_confidence_check(name, events, clusterers, che
     # Find the relevant clusterer
     main_clusterer = clusterers[name]
     sub_clusterers = []
-    for k in clusterers.keys(): 
+    for k in clusterers.keys():
         if k.startswith(name + "_"):
             sub_clusterers.append(k)
 
@@ -975,15 +993,15 @@ def _gmm_hierarchical_predict_and_confidence_check(name, events, clusterers, che
 class EventbasedCombination(UnsupervisedDisaggregator):
     """ This disaggregator is a combination of available event-based disaggregators.
     First fitting flags are combined and the created events are clustered the like Hart does it.
-    Then the longer segments are created and observed by a clustering of the flags and a subsequent 
+    Then the longer segments are created and observed by a clustering of the flags and a subsequent
     combination into events. This order has been proposed by Baranski.
 
-    Results are stored in two ways. This is different from the other disaggregating classes. 
-    -   The usual disaggregated store is stored with a resolution of 5 minutes. This is enough to 
+    Results are stored in two ways. This is different from the other disaggregating classes.
+    -   The usual disaggregated store is stored with a resolution of 5 minutes. This is enough to
         do further steps like forecasting.
-    -   To evaluate NILM it is also possible to store exact results. In this case, the 
-        additional file only stores the flanks. During read all other values have to be 
-        reconstructed by using interpolate. That reduces load times significantly. 
+    -   To evaluate NILM it is also possible to store exact results. In this case, the
+        additional file only stores the flanks. During read all other values have to be
+        reconstructed by using interpolate. That reduces load times significantly.
     """
 
     """ Necessary attributes of any approached meter """
@@ -994,7 +1012,7 @@ class EventbasedCombination(UnsupervisedDisaggregator):
 
     """ The relate my model """
     model_class = EventbasedCombinationDisaggregatorModel
- 
+
 
     def __init__(self, model = None):
         if model == None:
@@ -1009,11 +1027,11 @@ class EventbasedCombination(UnsupervisedDisaggregator):
 
         Parameters
         ----------
-        metergroup: nilmtk.MeterGroup 
+        metergroup: nilmtk.MeterGroup
             The metergroup of the buildings main meters
-        output_datastore: nilmtk.Datastore 
+        output_datastore: nilmtk.Datastore
             Storage where the disaggregated meters are stored
-        exact_nilm_datastore: nilmtk.Datastore 
+        exact_nilm_datastore: nilmtk.Datastore
             If set, the NILM Output is also stored as an exact result with full resolution.
         tmp_folder: str
             Path to a folder where intermediate results shall be stored.
@@ -1025,14 +1043,14 @@ class EventbasedCombination(UnsupervisedDisaggregator):
         kwargs.setdefault('sections', metergroup.good_sections().merge_shorter_gaps_than('10min'))
         pool = Pool(processes=3)
         metergroup = metergroup.sitemeters()
-        model = self.model        
+        model = self.model
         model.steady_states = []
         model.transients = []
         model.appliances = []
         model.appliances_detailed = []
         model.clusterer = [{}] * len(metergroup)
-        model.overall_powerflow = overall_powerflow = [] 
-                
+        model.overall_powerflow = overall_powerflow = []
+
         ## 1. Load the events from the powerflow data
         print('Extract events')
         t1 = time.time()
@@ -1077,26 +1095,26 @@ class EventbasedCombination(UnsupervisedDisaggregator):
 
 
         ## 2. Create separate powerflows with events, shared by multiple phases
-        t1 = time.time()
-        model.transients, model.steady_states = \
-           separate_simultaneous_events(model.transients, model.steady_states, model.params['noise_level'])
-        if not tmp_folder is None:
-           pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'wb'))
-        print('Shared phase separation: ' + str(time.time() - t1))
+        # t1 = time.time()
+        # model.transients, model.steady_states = \
+        #    separate_simultaneous_events(model.transients, model.steady_states, model.params['noise_level'])
+        # if not tmp_folder is None:
+        #    pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'wb'))
+        # print('Shared phase separation: ' + str(time.time() - t1))
 
 
         ## 3. Separate segments between base load
-        #self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'rb'))
-        #for i in range(3,6):
-        #    model.steady_states[i] = pd.DataFrame(model.steady_states[i]).rename(columns={'active transition':'active average'})
+        self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'rb'))
+        for i in range(3,len(model.steady_states)):
+            model.steady_states[i] = pd.DataFrame(model.steady_states[i]).rename(columns={'active transition':'active average'})
         t1 = time.time()
         input_params = []
         for i in range(3):#len(model.transients)):
            input_params.append((self.model.transients[i], self.model.steady_states[i],
                                 self.model.params['state_threshold'], self.model.params['noise_level']))
-           #self.model.transients[i] = add_segments(input_params[-1])
-        self.model.transients = pool.map(add_segments, input_params)
-        #plot.plot_segments(self.model.transients[0][:1000], self.model.steady_states[0][:1000])
+           self.model.transients[i] = add_segments(input_params[-1])
+        #self.model.transients = pool.map(add_segments, input_params)
+        #nilmtk.plots.plot_segments(self.model.transients[0][:1000], self.model.steady_states[0][:1000])
         print('Segment separation: ' + str(time.time() - t1))
         
 
