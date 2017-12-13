@@ -12,9 +12,11 @@ from warnings import warn
 #from .electric import align_two_meters
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import itertools
 import seaborn as sns
 from nilmtk import TimeFrameGroup
 import itertools
+from nilmtk import TimeFrameGroup, TimeFrame
 
 
 #############################################################
@@ -67,24 +69,31 @@ def plot_overall_power_vs_disaggregation(main_meter, disaggregations, verbose = 
     return fig
 
 
-def plot_phases():
+def plot_phases(building, interval = pd.Timedelta("1d"), verbose = False):
+    ''' Simply plots all three phases to see the output.
+    This is equal to plotting the different sitemeters of the building.
+
+    Parameters
+    ----------
+    building: nilmtk.building
+        The building for which the different phases are plottet.
+    interval: pd.Timedelta
+        The timedelta to plot.
+    verbose: bool
+        Whether to plot additional output.
     '''
-    Plot all three phases to see the output.
-    Was included in the Nilm test.
-    Don't know whether I still need it.
-    '''
-    new_timeframe = TimeFrameGroup([TimeFrame(start=building.elec.sitemeters()[1].get_timeframe().start, end = building.elec.sitemeters()[1].get_timeframe().start + pd.Timedelta("1d"))])
+    fig = plt.figure()
+    start = building.elec.sitemeters()[1].get_timeframe().start
+    new_timeframe = TimeFrameGroup([TimeFrame(start=start, end = start + interval)])
     flows = []
     for i in range(1,4):
-        print(i)
+        if verbose:
+            print("Load {0}/{1}".format(i,3))
         flows.append(building.elec.sitemeters()[i].power_series_all_data(sections=new_timeframe))
     all = pd.concat(flows, axis = 1)
-    all.columns = ['A', 'B', 'C']
-    print('Plot')
-    all.plot(colors=['r', 'g', 'b'])
-    print('Show')
-    plt.show()
-
+    all.columns = ['Phase 1', 'Phase 2', 'Phase 3']
+    all.plot(colors=['r', 'g', 'b'], ax = fig.add_subplot(111))
+    return fig
 
 
 
@@ -119,7 +128,6 @@ def plot_stackplot(disaggregations, total_power = None, verbose = True):
         ax = fig.add_subplot(111)
 
     # The stacked plot
-    powerflows = []
     all = pd.DataFrame(disaggregations.meters[0].power_series_all_data(timeframe=timeframe).rename('Rest'))
     for i, dis in enumerate(disaggregations.meters):
         if i == 0:
@@ -145,6 +153,11 @@ def plot_segments(transitions, steady_states, ax = None):
         The transitions with the 'segment' field set
     ax: matplotlib.axes.Axes
         An axis object to print to.
+
+    Returns
+    -------
+    fig: matplotlib.figure.Figure
+        The newly plot figure
     '''
     # Prepare plot
     fig = plt.figure()
@@ -165,7 +178,7 @@ def plot_segments(transitions, steady_states, ax = None):
         rows = steady_states[steady_states['segment'] == cur]
         ax.fill_between(rows.index.to_pydatetime(), rows['active average'].values, 0, step='post')
     ax.autoscale_view()
-    i = 1
+    return fig
 
 
 
@@ -244,110 +257,220 @@ def plot_evaluation_assignments(sec_ground_truth, sec_disaggregations, assignmen
         ax.set_xlim([timeframe.start, timeframe.end])
         plt.setp(ax.get_xticklabels(), visible=False)
         plt.setp(ax.get_yticklabels(), visible=False)
-
     return fig
 
 
 
-def plot_multiphase_event(original_powerflows, separated_powerflows, amount_of_examples = 1, surrounding = 10):
+def plot_multiphase_event(original_powerflows, original_adapted, multiphase_events, section,
+                          surrounding = 30, col = "active transition", plot_freq = "2s", verbose = False):
     ''' This function is used to plot multiphase events.
     It shows how the multiphase events are cut out and put inside separate poweflows.
 
     Parameters
     ----------
-    original_powerflows: [pd
-        The original transients
-    separated_powerflows:
-        The separated transients
-    amount_of_examples:
-        How many examples shall be arranged together.
+    original_powerflows: [pd.DataFrame]
+        The original transients as DataFrame one per phase
+    original_adapted: [pd.DataFrame]
+        The new original phases where the multiphaseevents
+        are removed.
+    multiphase_events:
+        The separated transients appearing in multiple phases.
+    section: nilmtk.TimeFrame
+        The section which shall be plotted.
     surrounding: int
-        Number of events in the original power flows
-        which are incorporated into the load.
-
+        Minutes in the original power flows plottet
+        arround the interesting section.
+    col: index
+        Which is the power transient index
+    plot_freq: str
+        The frequency with which the powerflows are resampled before being plotted.
+    verbose: bool
+        Whether to print additional information
+        
     Returns
     -------
     fig: matplotlib.figure.Figure
         The newly plotted figure
     '''
 
-    fig, ax = plt.subplots(figsize=(50,50)) #, tight_layout=True)
+    if not type(surrounding) is pd.Timedelta:
+        surrounding = pd.Timedelta(minutes=surrounding)
 
-    plot.plot_powerflow_from_events(
-        transients[a][firsts.values[1]:last.values[1]], transients[a].loc[common_transients.index][firsts.values[1]:last.values[1]])
+    fig = plt.figure(figsize=(50,50)) #, tight_layout=True)
+
+    plots_per_column = 3
+    all_plots = [original_powerflows, original_adapted, multiphase_events]
+
+    # Plot before separation
+    for i, cur_plot in enumerate(all_plots):
+        for j, powerflow in enumerate(cur_plot):
+            ax = fig.add_subplot(plots_per_column,3,i+j*3+1)
+            limited = powerflow.loc[section.start-surrounding:section.end+surrounding][col]
+            if verbose:
+                print("Plot {0}:{1}".format(i,j))
+            limited.loc[section.start-surrounding] = 0
+            limited.loc[section.end+surrounding] = 0
+            limited = limited.cumsum().resample(plot_freq).ffill()
+            limited.plot(ax=ax)
+            ax.set_xlim([section.start-surrounding, section.end+surrounding])
+            plt.setp(ax.get_xticklabels(), visible=False)
+            plt.setp(ax.get_yticklabels(), visible=False)
+
+    return fig
+
 #endregion
 
 
 
 ################################################################
 #region Cluster plotting
-def plot_clustering(clusterers, elements, columns_to_project):
+
+def plot_clustering(clusterers, elements, columns_to_project,
+                    subtype_column="subtype", appliance_column="appliance", confidence_column = "confident",
+                    print_confidence=True, filter=False, **plot_args):
     '''
     Plotting of points in 2d space. For K-means and gmm the bordes are also plotted.
 
     Paramters
     ---------
+    clusterers: {str -> scikit.GaussianMixture}
+        The dictionary of available clusterers as built
+        within the eventbased_combination clusterer.
+    elements: pd.DataFrame
+        The dataframe containing the elements to plot.
+    columns_to_project: [index,...]
+        The indices to project to. The length of this function
+        defines automatically defines the way of plotting.
+    subtype_column: index
+        The column defining the entry in the clusterers.
+    appliance_column: index
+        The column defining the appliance.
+    confidence_column: index
+        The column defining if the prediction was condident
+    print_confidence: int
+        If not zero, the confidence interval which will be plotted.
+        (Currently not yet supported for 3d plots.)
+    filter: bool
+        Whether only the confident points shall be plotted.
+    plot_args: dict
+        Additional arguments forwarded to the plot function.
+        Eg point size: s=0.1
 
     Returns
     -------
+    fig: matplotlib.figure.Figure
+        The newly plot figure
     '''
 
+    # Create the input for the concrete plotting functions
+    data = elements[columns_to_project].values
+    _, labels = np.unique(elements[subtype_column].values, return_inverse=True)
+    labels = labels * 100 + elements[appliance_column].astype(int).values
+    confidence = elements[confidence_column]
+
+    # Call the plotting
     if len(columns_to_project) == 2:
-        fig = plot_clustering_2d(clusterers, elements, columns_to_project)
+        fig = plot_clustering_2d(clusterers, data, labels, confidence, print_confidence, filter, **plot_args)
     elif len(columns_to_project) == 3:
-        fig = plot_clustering_3d(clusterers, elements, columns_to_project)
+        fig = plot_clustering_3d(clusterers, data, labels, confidence, print_confidence, filter, **plot_args)
     else:
         raise Exception("Only 2d or 3d plot possible.")
     return fig
 
 
-def plot_clustering_2d(clusterers, elements, columns_to_project):
+def plot_clustering_2d(clusterers, data, labels, confidence, print_confidence = 1, filter = False, **plot_kwargs):
     '''
     Plotting of points in 2d space. For K-means and gmm the bordes are also plotted.
+
+    Parameters
+    ----------
+    clusterers: {str -> scikit.GaussianMixture}
+        The dictionary of relevant clusterers as built
+        within the eventbased_combination clusterer.
+    data: np.ndarray(,2)
+        The data points to plot
+    labels: np.ndarray(int)
+        The labels the datapoints belong to
+    confidence: np.ndarray(bool)
+        Bool whether the point is seen as confident
+    print_confidence: int
+        If not zero, the confidence interval which will be plotted.
+    filter: bool
+        Whether only the confident points shall be plotted.
+    plot_kwargs: dict
+        Additional arguments forwarded to the plot function.
+
+    Returns
+    -------
+    fig: matplotlib.figure.Figure
+        The newly plot figure
     '''
-    print_ellipse = False
-    print_ellipse = True
-    filter = True
-    filter = False
-    color_iter = itertools.cycle(['navy', 'c', 'cornflowerblue', 'gold', 'darkorange'])
 
-    # Transform the points into the coordinate system of the covar ellipsoid
-    cur_X = cur_X - mean
-    v, w = np.linalg.eigh(covar)
-    std_dev = np.sqrt(v) # * np.sqrt(2)
-    transformed_points = cur_X.dot(w.T)
+    fig = plt.figure()
+    plot_kwargs.setdefault('cmap', plt.cm.Set3)
+    color = plot_kwargs["cmap"](labels)
 
-    tst = spatial.distance.mahalanobis(cur_X, mean, linalg.inv(covar))
-    tst = spatial.distance.cdist(cur_X+mean, np.expand_dims(mean, 0), 'mahalanobis', VI=linalg.inv(covar))
-    # If not 90% sure take at least the ones inside the one sigma environment
-    confident_tmp = (np.sum(transformed_points**2 / (1*std_dev)**2 , axis = 1) < 1)
-    for confidence_intervall in range(1.1,2.6,0.1):
-        confident_tmp.append(np.sum(transformed_points**2 / (confidence_intervall*std_dev)**2 , axis = 1) < 1)
-    confident[cur] |= (np.sum(transformed_points**2 / (1*std_dev)**2 , axis = 1) < 1)
-    tst = spatial.distance.mahalanobis(cur_X, mean, linalg.inv(covar))
+    # Print the datapoints
+    plt.scatter(data[confidence][:,0], data[confidence][:,1], c=color[confidence], alpha = 1, **plot_kwargs)
+    if not filter:
+        plt.scatter(data[~confidence][:,0], data[~confidence][:,1], c=color[~confidence], alpha = 0.5, **plot_kwargs)
 
-    # Plot an ellipse to show the Gaussian component
-    plt.scatter((cur_X+mean)[:,2], (cur_X+mean)[:, 3], 5, c=confident[cur])
-    if print_ellipse:
-        v = 2. * np.sqrt(2.) * np.sqrt(v)      #Wurzeln, weil StdDev statt varianz, *2 da Diameter statt Radius, *sqrt(2)??
-        #u = w[0] / linalg.norm(w[0])          Normalisiert ist es eigentlich schon!
-        angle = np.arctan(w[0][1] / w[0][0])
-        angle = 180. * angle / np.pi  # convert to degrees
-        ell = mpl.patches.Ellipse(mean, v[0], v[1], 180. + angle, color='gold')
-        ell.set_clip_box(fig.bbox)
-        ell.set_alpha(0.5)
-        fig.axes[0].add_artist(ell)
+    if not print_confidence:
+        return fig
+
+    # Print the confidence intervals if demanded
+    for key in clusterers:
+        for mean, covar in zip(clusterers[key].means_, clusterers[key].covariances_):
+            v, w = np.linalg.eigh(covar)
+            v = print_confidence * np.sqrt(2.) * np.sqrt(v)
+            #u = w[0] / linalg.norm(w[0]) # already normalized
+            w = w[0,:1] / np.linalg.norm(w[0,:1])
+            angle = np.arctan(w[0][1] / w[0][0])
+            angle = 180. * angle / np.pi  # convert to degrees
+            ell = mpl.patches.Ellipse(mean, v[0], v[1], 180. + angle, color='black', fill = False)
+            ell.set_clip_box(fig.bbox)
+            ell.set_alpha(0.5)
+            fig.axes[0].add_artist(ell)
+    return fig
 
 
-def plot_clustering_3d(clusterers, elements, columns_to_project, appliances = False):
+def plot_clustering_3d(clusterers, data, labels, confidence, print_confidence = True, filter = False, **plot_kwargs):
     '''
     Plotting of points in 3d space with optional colouring after assignments.
-    '''
-    ax = plt.axes(projection='3d');
-    ax.scatter(tst[('active transition', 'avg')].values,tst[('duration', 'max')].values, tst[('spike', 'max')].values, s=0.1)
-    events.plot.scatter(('active transition', 'avg'),('duration', 'log'), c=(events['color']), s=1, colormap='gist_rainbow')
-    events.plot.scatter(('active transition', 'avg'),('duration', 'max'), c=events['color'], s=1)
 
+    clusterers: {str -> scikit.GaussianMixture}
+        The dictionary of available clusterers as built
+        within the eventbased_combination clusterer.
+    data: np.ndarray(,2)
+        The data points to plot
+    labels: np.ndarray(int)
+        The labels the datapoints belong to
+    confidence: np.ndarray(bool)
+        Bool whether the point is seen as confident
+    print_confidence: int
+        If not zero, the confidence interval which will be plotted.
+        Not yet supported for 3D!!!
+    filter: bool
+        Whether only the confident points shall be plotted.
+    plot_args: dict
+        Additional arguments forwarded to the plot function.
+
+    Returns
+    -------
+    ax: matplotlib.figure.Axes
+        The newly plot axes. One has to have a look how to make it a figure.
+    '''
+
+    plot_kwargs.setdefault('cmap', plt.cm.Set3)
+    color = plot_kwargs["cmap"](labels)
+
+    ax = plt.axes(projection='3d');
+    ax.scatter(data[confidence][:,0], data[confidence][:,1], data[confidence][:,2], c=color[confidence],
+               s=plot+plot_kwargs["s"])
+    if not filter:
+        ax.scatter(data[~confidence][:,0], data[~confidence][:,1], data[~confidence][:,2], c=color[~confidence],
+                   alpha=0.5 ,s=0.1)
+    return ax
 
 
 def calc_errors_correlations(orig_corrs, disag_corrs, cluster_corrs, multiple_diagrams = False):
@@ -485,6 +608,9 @@ def plot_forecast(forecasts, original_load, interval = None, ax = None, addition
 ################################################################
 #region Elaborate Powerflow plotting
 def plot_powerflow_from_events(events_list=[], column = 'active transition'):
+    """
+    Currently not in use.
+    """
     fig, ax = plt.subplots(figsize=(8,6))#grps.plot(kind='kde', ax=ax, legend = None)
     for events in events_list:
         events[column].cumsum().plot(ax=ax)
@@ -498,22 +624,22 @@ def plot_powerflow_from_events(events_list=[], column = 'active transition'):
 ################################################################
 #region Originally available plots
 
-def plot_series(series, ax=None, fig=None,
-                date_format='%d/%m/%y %H:%M:%S', tz_localize=True, **plot_kwargs):
-    """Plot function for series which is about 5 times faster than
-    pd.Series.plot().
+def plot_series(series, ax=None, fig=None, date_format='%d/%m/%y %H:%M:%S', tz_localize=True, **plot_kwargs):
+    """Faster plot function
+    Function is about 5 times faster than pd.Series.plot().
 
     Parameters
     ----------
     series : pd.Series
-    ax : matplotlib.axis.Axes, optional
+        Data to plot
+    ax : matplotlib Axes, optional
         If not provided then will generate our own axes.
     fig : matplotlib.figure.Figure
     date_format : str, optional, default='%d/%m/%y %H:%M:%S'
     tz_localize : boolean, optional, default is True
         if False then display UTC times.
-
-    Can also use all **plot_kwargs expected by `ax.plot`
+    plot_kwargs:
+        Can also use all **plot_kwargs expected by `ax.plot`
     """
     if series is None or len(series) == 0:
         return ax
@@ -534,8 +660,7 @@ def plot_series(series, ax=None, fig=None,
     return ax
 
 
-def plot_pairwise_heatmap(df, labels, edgecolors='w',
-                          cmap=mpl.cm.RdYlBu_r, log=False):
+def plot_pairwise_heatmap(df, labels, edgecolors='w', cmap=mpl.cm.RdYlBu_r, log=False):
     """
     Plots a heatmap of a 'square' df
     Rows and columns are same and the values in this dataframe
