@@ -10,11 +10,11 @@ import math
 from warnings import warn
 #from .metergroup import MeterGroup, iterate_through_submeters_of_two_metergroups
 #from .electric import align_two_meters
-import matplotlib
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import seaborn as sns
 from nilmtk import TimeFrameGroup
-
+import itertools
 
 
 #############################################################
@@ -350,85 +350,92 @@ def plot_clustering_3d(clusterers, elements, columns_to_project, appliances = Fa
 
 
 
-def plot_results(X, Y_, means, covariances, index, title):
+def calc_errors_correlations(orig_corrs, disag_corrs, cluster_corrs, multiple_diagrams = False):
     '''
-    Function to plot the results of a GMM fitting.
-    I do not know exactly where it comes from.
+    Returns three columns of plots with the correlations of dimensions as Bar Diagram.
+    It taks place in three columns:
+        1. The correlation of the original 
+        2. The correlation of the disaggregations
+        3. The correlation of the clusters
+
+    Parameters
+    ----------
+    orig_corrs: pd.DataFrame
+        The correlations for the different clusters
+        Row per correlation dimension
+    disag_corrs: pd.DataFrame
+        The metergroup of disaggregations
+        Row per correlation dimension
+    cluster_corrs: pd.DataFrame
+        The correlations of each of the clustered powerflows.
+
+    Results
+    -------
+    error_report: pd.Df
+        The correlations mixed together and calculated.
     '''
+    fig = plt.figure()
 
-    splot = plt.subplot(2, 1, 1 + index)
-    for i, (mean, covar, color) in enumerate(zip(
-            means, covariances, color_iter)):
-        v, w = linalg.eigh(covar)
-        v = 2. * np.sqrt(2.) * np.sqrt(v)
-        u = w[0] / linalg.norm(w[0])
-        # as the DP will not use every component it has access to
-        # unless it needs it, we shouldn't plot the redundant
-        # components.
-        if not np.any(Y_ == i):
-            continue
-        plt.scatter(X[Y_ == i, 0], X[Y_ == i, 1], .8, color=color)
+    corrs = [orig_corrs, disag_corrs, cluster_corrs]
+    for corr in corrs:
+        for column in corr.columns:
 
-        # Plot an ellipse to show the Gaussian component
-        angle = np.arctan(u[1] / u[0])
-        angle = 180. * angle / np.pi  # convert to degrees
-        ell = mpl.patches.Ellipse(mean, v[0], v[1], 180. + angle, color=color)
-        ell.set_clip_box(splot.bbox)
-        ell.set_alpha(0.5)
-        splot.add_artist(ell)
+    
 
-        plt.xlim(-9., 5.)
-        plt.ylim(-3., 6.)
-        plt.xticks(())
-        plt.yticks(())
-        plt.title(title)
 #endregion
 
 
 
 ################################################################
 #region Forecast plotting
-def plot_forecasting(trained, learnspan,  forecast, forecastspan):
+
+def plot_ext_data_relation(load, external_data, interval = None, smoothing = None, ):
     '''
-    Plots the forecast and the real powerflow next to each other.
-    trained: Das gemachte Training
-    l
+    Plots a two scale plot for the load and the external data.
+    Like this one can compare influence of external data to the powerflow.
+
+    Paramters
+    ---------
+    load: pd.Series
+        The load profile in KW
+    external_data: pd.Series
+        The external data one wants to compare the load to.
+    interval: pd.Timeframe
+        Optional definition of the reagion to plot.
+    smoothing: int
+        If set, the data is smoothed to the rolling average across the 
+        given dates. Reasonable since the correlation sometimes gets 
+        onlz visible within long term periods.
     '''
-    metric_names = [metrics_label_dictionary[metric] for metric in metrics]
-    result = pd.DataFrame(columns = metric_names)
-    for appliance in ground_truth:
-        cur_metric_results = []
-        for metric in metrics:
-            fn = metrics_func_dictionary[metric]
-            cur_metric_results = fn(prediction, appliance)
-        result.loc[appliance.name] = cur_metric_results
+    if ax == None:
+        fig, ax1 = plt.subplots()
+       
+    if not smoothing is None:
+        load = load.rolling_mean(smoothing)
+    load.plot(ax=ax1)
+    #ax1.plot(t, s1, 'b-')
+    #ax1.set_xlabel('time (s)')
+    ## Make the y-axis label, ticks and tick labels match the line color.
+    #ax1.set_ylabel('exp', color='b')
+    #ax1.tick_params('y', colors='b')
+
+    ax2 = ax1.twinx()
+    if not smoothing is None:
+        external_data = external_data.rolling_mean(smoothing)
+    external_data.plot(ax=ax2)
+    #s2 = np.sin(2 * np.pi * t)
+    #ax2.plot(t, s2, 'r.')
+    #ax2.set_ylabel('sin', color='r')
+    #ax2.tick_params('y', colors='r')
+    
+    return fig
 
 
-def plot_forecast(gt, forecaster):
-    # Aus dem SARIMAX Forecaster genommen
 
-    # Plot the forecast
-    series_to_plot = pd.concat([powerflow, forecast], axis = 1).fillna(0)
-    series_to_plot.plot()
-    pyplot.show()
-    i = abs['tst']
-
-    # Plot residual errors
-    residuals =pd.DataFrame(model_fit.resid)
-    residuals.plot()
-    pyplot.show()
-    residuals.plot(kind='kde')
-    pyplot.show()
-    print(residuals.describe())
-
-    # Print the summary
-    print(model_fit.summary())
-    print("############ ############ ############ ############ ############")
-    print(model_fit2.summary())
-
-
-def plot_forecast(forecast, original_load, interval = None, ax = None, additional_data =  {}):
+def plot_forecast(forecasts, original_load, interval = None, ax = None, additional_data =  {}):
     ''' Plots the forecast along the real powerflow
+    This is the main function to be used for visualization of forecasting quality.
+
     Paramters
     ---------
     forecast: pd.Series
@@ -436,24 +443,33 @@ def plot_forecast(forecast, original_load, interval = None, ax = None, additiona
     original_load: pd.Series
         The original load. Series contains at least interval of forecast.
     interval: pd.Timeframe
-        Optional definition of the reagion to plot.
+        Optional definition of the reagion to plot. If nothing given 
+        the timeframe of the forecasts dataframe is used - double the interval
     additional_data: [pd.Dataframe] or [pd.Series]
         Additional data, which can be plotted. For example the residuals of the
-        ARIMA model.
+        ARIMA model or the external power.
+
+    Returns
+    -------
+    ax: matplotlib.axes.Axes
+        The ax object with the forecasts.
     '''
 
     if interval is None:
-        load = original_load[forecast.index[0]-pd.Timedelta("24h"):forecast.index[-1]+pd.Timedelta("24h")]
+        load = original_load[forecasts.index[0]-pd.Timedelta("24h"):forecasts.index[-1]+pd.Timedelta("24h")]
     else:
         load = original_load[interval.start:interval.end]
 
     if ax is None:
         fig, ax = plt.subplots()
 
-    forecast.plot(ax=ax)
-    load.plot(ax=ax)
+    # One main plot and distinct plot for each forecast
+    load.plot(ax=ax, linewidth=2)
+    marker = itertools.cycle((',', '+', '.', 'o', '*')) 
+    for forecast in forecasts:
+        forecasts[forecast].plot(ax=ax, marker = next(marker))
 
-
+    # Finally plot additiona data if available
     for additional in additional_data:
         residuals =pd.DataFrame(model_fit.resid)
         additional.plot(ax = ax, kind='kde')
@@ -490,9 +506,9 @@ def plot_series(series, ax=None, fig=None,
     Parameters
     ----------
     series : pd.Series
-    ax : matplotlib Axes, optional
+    ax : matplotlib.axis.Axes, optional
         If not provided then will generate our own axes.
-    fig : matplotlib Figure
+    fig : matplotlib.figure.Figure
     date_format : str, optional, default='%d/%m/%y %H:%M:%S'
     tz_localize : boolean, optional, default is True
         if False then display UTC times.
@@ -519,7 +535,7 @@ def plot_series(series, ax=None, fig=None,
 
 
 def plot_pairwise_heatmap(df, labels, edgecolors='w',
-                          cmap=matplotlib.cm.RdYlBu_r, log=False):
+                          cmap=mpl.cm.RdYlBu_r, log=False):
     """
     Plots a heatmap of a 'square' df
     Rows and columns are same and the values in this dataframe
@@ -537,7 +553,7 @@ def plot_pairwise_heatmap(df, labels, edgecolors='w',
         df,
         edgecolors=edgecolors,  # put white lines between squares in heatmap
         cmap=cmap,
-        norm=matplotlib.colors.LogNorm() if log else None)
+        norm=mpl.colors.LogNorm() if log else None)
 
     ax.autoscale(tight=True)  # get rid of whitespace in margins of heatmap
     ax.set_aspect('equal')  # ensure heatmap cells are square
@@ -605,7 +621,7 @@ def latexify(fig_width=None, fig_height=None, columns=1, fontsize=8):
         'figure.figsize': [fig_width, fig_height],
         'font.family': 'serif'
     }
-    matplotlib.rcParams.update(params)
+    mpl.rcParams.update(params)
 
 
 def format_axes(ax, spine_color='gray'):
