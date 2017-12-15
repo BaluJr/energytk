@@ -340,6 +340,58 @@ class DatasetAnalysis(object):
 
 
 
+            
+    def repair_overall_powerflow(timeframe, verbose = True):
+        ''' Returns a repaired overallpowerflow 
+        where missing smart meters are calculated out.
+        This function uses the GoodSections and calculates how many of all
+        smart meters are active. It then uses this data to calculate the 
+        average powerflow per section. Like this deactivated smart meters 
+        are averaged out. Of course a basic dataquality is required and all 
+        smart meters are expected to have the same average power.
+        
+        Paramters
+        ---------
+        timeframe = nilmtk.TimeFrame
+            The section in which the powerflow is measured.
+        verbose: bool
+            Whether to print additonal output
+
+        Returns
+        -------
+        The repaired power
+        '''
+
+        ## Get together all meters
+        site_meters = MeterGroup()
+        for dataset in datasets:
+            site_meters = site_meters.union(dataset.sitemeters())
+            if verbose:
+                print("Dataset {0} all_elecmeters".format(i))
+    
+        ## Load all data
+        s = pd.Timestamp("1.1.2016", tz="UTC")
+        e = pd.Timestamp("13.3.2017", tz="UTC")
+        section = TimeFrameGroup([TimeFrame(start=s, end=e)])
+        total_powerflow = site_meters.power_series_all_data(sample_period=900, sections=section, verbose=True)
+    
+        # Count the missing meters for each point in time
+        all_non_null_sections = pd.Series(0, index = pd.DatetimeIndex(start=s, end=e, freq='15min'))
+        for i, meter in enumerate(site_meters.meters):
+            if verbose:
+                print("Meter {0}".format(i))
+            cur = TimeFrameGroup.calculate_upcounts([site_meters.meters[0].nonzero_sections(sections = section)]).resample('1min').ffill().resample('15min', how='mean')
+            all_non_null_sections += cur.fillna(0)
+    
+        # Correct the total powerflow
+        avg_power = total_powerflow / all_non_null_sections
+        power = avg_power * len(site_meters.meters)
+        return power
+        
+    
+
+
+
 
 def precalculate_all_stats(paths, bad_meters, verbose = True):
     """ Precalculates all statistics of the dataset.
@@ -373,3 +425,9 @@ def precalculate_all_stats(paths, bad_meters, verbose = True):
         dataset.calc_and_cache_stats(ignore_meters=bad_meters, verbose=True)
         if verbose:
             print("##### Finished {0} at {1}".format(str(i),datetime.now()))
+
+
+
+        
+
+

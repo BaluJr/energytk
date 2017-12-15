@@ -301,7 +301,6 @@ def plot_multiphase_event(original_powerflows, original_adapted, multiphase_even
     plots_per_column = 3
     all_plots = [original_powerflows, original_adapted, multiphase_events]
 
-    # Plot before separation
     for i, cur_plot in enumerate(all_plots):
         for j, powerflow in enumerate(cur_plot):
             ax = fig.add_subplot(plots_per_column,3,i+j*3+1)
@@ -473,13 +472,16 @@ def plot_clustering_3d(clusterers, data, labels, confidence, print_confidence = 
     return ax
 
 
-def calc_errors_correlations(orig_corrs, disag_corrs, cluster_corrs, multiple_diagrams = False):
+
+def plot_correlations(orig_corrs, disag_corrs, cluster_corrs):
     '''
     Returns three columns of plots with the correlations of dimensions as Bar Diagram.
+    For a single household!
     It taks place in three columns:
         1. The correlation of the original 
         2. The correlation of the disaggregations
         3. The correlation of the clusters
+    This plot shall visualize the quality of correlation within each diagram.
 
     Parameters
     ----------
@@ -498,12 +500,24 @@ def calc_errors_correlations(orig_corrs, disag_corrs, cluster_corrs, multiple_di
         The correlations mixed together and calculated.
     '''
     fig = plt.figure()
-
+    plots_per_column = len(disag_corrs)
+    # Plot before separation
     corrs = [orig_corrs, disag_corrs, cluster_corrs]
-    for corr in corrs:
-        for column in corr.columns:
+    for i, corr in enumerate(all_plots):
+        for j, cur_corr in corr.iterrows():
+            ax = fig.add_subplot(plots_per_column,3,i+j*3+1)
+            cur_corr.plot(ax = ax)
 
-    
+            #limited = powerflow.loc[section.start-surrounding:section.end+surrounding][col]
+            #if verbose:
+            #    print("Plot {0}:{1}".format(i,j))
+            #limited.loc[section.start-surrounding] = 0
+            #limited.loc[section.end+surrounding] = 0
+            #limited = limited.cumsum().resample(plot_freq).ffill()
+            #limited.plot(ax=ax)
+            #ax.set_xlim([section.start-surrounding, section.end+surrounding])
+            #plt.setp(ax.get_xticklabels(), visible=False)
+            #plt.setp(ax.get_yticklabels(), visible=False)
 
 #endregion
 

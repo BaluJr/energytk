@@ -646,7 +646,8 @@ def calculate_metrics_per_appliances(metrics, prediction, ground_truth, prematch
     Not all metrics support the per appliance calculation. This is noted in the "usecase" field of
     the metrics_dictionary.
 
-    Paramters:
+    Paramters
+    ---------
     merics: [str]
         A list of the metrics, defined in the above dictionary 'metrics_dictionary'
     prediction: nilmtk.elec
@@ -786,35 +787,6 @@ def calculate_errors_combinatorical(predictions, ground_truth, error_func):
 
 
 
-
-
-# Scaled errors used for forecasting
-# Separated from the others as calculated: Only forwards to scikit-learn metrics
-# These are just temporary solutions as the forecasting should be also stored as a 
-# elecmeter in the future.
-def mape(pred, ground_truth):
-    ''' 
-    K) This function calculates the mean average percentage error used for 
-    forecasting. It takes to electric as input, whose powerflow function
-    it uses.
-    '''
-    # Calc timeframe?
-    #cut = metrics.index.intersection(ground_truth.index)
-    #timeframe = TimeFrame(start = cut[0], end = cut[-1])
-
-    pred, ground_truth = np.array(pred), np.array(ground_truth)
-    tst = sklearn.metrics.mean_absolute_error(pred, ground_truth)
-    return np.mean(np.abs((pred - ground_truth) / pred)) * 100
-
-
-def nrmse(disaggregations, ground_truth, tolerance = 0):
-    ''' M) Normalized Root-Mean-Square Error (NRMSE)
-    '''
-    tst = sklearn.metrics.mean_squared_error(disaggregations, ground_truth)
-    tst = np.sqrt(tst)
-    return tst
-
-
 def fraction_energy_assigned_correctly(predictions, ground_truth):
     ''' ORIGINAL
     ?) Kann ich nicht zuordnen:
@@ -864,7 +836,178 @@ def fraction_energy_assigned_correctly(predictions, ground_truth):
 
 
 
+
+######################
+# Scaled errors used for forecasting
+# Separated from the others as calculated: Only forwards to scikit-learn metrics
+# These are just temporary solutions as the forecasting should be also stored as a 
+# elecmeter in the future.
+def mae(pred, ground_truth):
+    ''' 
+    K) This function calculates the mean average error used for 
+    forecasting. 
+
+    Parameters
+    ----------
+    forecast: pd.Series
+        The forecasted powerflow
+    original: pd.Series
+        The real powerflow
+
+    Returns
+    -------
+        mae: float
+    '''
+    pred, ground_truth = np.array(pred), np.array(ground_truth)
+    return sklearn.metrics.mean_absolute_error(pred, ground_truth)
+
+
+def mape(forecast, original):
+    ''' 
+    K) This function calculates the mean average percentage error used for 
+    forecasting. It takes to electric as input, whose powerflow function
+    it uses.
+
+    Parameters
+    ----------
+    forecast: pd.Series
+        The forecasted powerflow
+    original: pd.Series
+        The real powerflow
+
+    Returns
+    -------
+        mape: float
+    '''
+    forecast, original = np.array(forecast), np.array(original)
+    return np.mean(np.abs((forecast - original) / forecast)) * 100
+
+
+def nrmse(forecast, original):
+    ''' M) Normalized Root-Mean-Square Error (NRMSE)
+
+    Parameters
+    ----------
+    forecast: pd.Series
+        The forecasted powerflow
+    original: pd.Series
+        The real powerflow
+
+    Returns
+    -------
+        nrmse: float
+    '''
+    forecast, original = np.array(forecast), np.array(original)
+    tst = sklearn.metrics.mean_squared_error(forecast, original)
+    return np.sqrt(tst)
+
+
+# This dictionary contains the metrics which can be appliend to normal pandas frames. 
+# This is different to the metrics above, which target nilmtk.Elecs. 
+metrics_forecasting_dictionary = {
+    'MAE':
+        {'lbl': "MAE", 'fn': mae, 'better':-1},
+    'MAPE':
+        {'lbl': "MAPE", 'fn':mape, 'better':-1},
+    'NRMSE':
+        {'lbl': "NRMSE", 'fn':nrmse, 'better':-1},
+}
+
+
+def calc_errors_forecasting(forecasts, original_load, metrics, null_handling = 'drop'):
+    '''
+    Calculates the metrics for the forecasting. Is different 
+    from the error calculations above, which are used for 
+    NILM as there is only one fixed ground truth and the 
+    data is delivered in Memory as a pd.DataFrame
     
+    Paramters
+    ---------
+    forecasts: pd.DataFrame
+        Columns are the forecastes of the timestamps aligned to 
+        the original_load.
+    original: pd.Series
+        The original powerflow
+    merics: [str]
+        A list of the metrics, defined in the above dictionary 'metrics_forecasting_dictionary'
+    null_handling: str ('drop' or 'interpolate')
+        What shalle be done with null values. Can be ignored or interpolated
+        Not used at the moment and always dropped.
+
+    Returns
+    -------
+    metrics: pd.DataFrame
+        An overview of all calculated metrics. The columns are the 
+        different methods of forecasts. Then there is one row per 
+        metric.
+    '''
+    # Truncate ground truth profile to interval
+    original_load = original_load.reindex(forecasts.index.tz_localize('UTC'))
+
+    # Calc the metrics
+    metric_names = [metrics_forecasting_dictionary[metric]['lbl'] for metric in metrics]
+    result = pd.DataFrame(columns = forecasts.columns, index = metric_names)
+    for cur in forecasts.columns:
+        for metric in metrics:
+            metric = metrics_forecasting_dictionary[metric]
+            name = metric['lbl']
+            forecast = forecasts[cur]
+            
+            # Drop nulls
+            missing = forecast.isnull()
+            forecast = forecasts[cur][~missing.values]
+            cur_original = original_load[~missing.values]
+            result.loc[name,cur] = metric['fn'](forecast, cur_original)
+    return result
+
+
+
+###################################
+# Clustering metrics
+def calc_errors_correlations(orig_corrs, disag_corrs, cluster_corrs, metrics):
+    '''
+    This is the main function calculating error metrics for 
+    correlation. It calculated the average maximum correlation
+
+    Parameters
+    ----------
+    orig_corrs:
+        The correlations for the different clusters
+    disag_corrs
+        The metergroup of disaggregations
+    cluster_corrs:
+        The created clustering
+    metrics:
+        The metrics used to 
+
+    Results
+    -------
+    error_report: pd.Df
+        The correlations mixed together and calculated.
+    '''
+
+    pass
+
+
+
+def calc_errors_clustering(orig_corrs, orig_clustering, disag_corrs, disag_clustering):
+    '''
+    This is the main function calculating error metrics for 
+    clustering.
+    It calculates the signature score for each group.
+
+    Parameter
+    ----------
+    orig_corrs: pd.DataFrame
+        The correlations of all the original loads in the dataset
+    disag_corrs:
+        The correlations of the disaggregated meters.
+    '''
+    pass
+
+
+
+
 ###################################
 ## Error metrics from disaggregation point of view (Also for forecasting)
 

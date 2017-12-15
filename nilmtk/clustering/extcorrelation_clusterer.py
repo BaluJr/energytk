@@ -56,8 +56,7 @@ class ExtCorrelationClustererModel(object):
     }
         
     config = {
-        'size_input_queue': 0,
-        'verbose': True
+        'size_input_queue': 0
     }
 
 
@@ -142,31 +141,33 @@ class ExtCorrelationClusterer(Clusterer):
         correlations = corrdataframe.apply(lambda col, method = self.model.params['method']: col.corr(current_loadseries, method=method), axis=0)
         return correlations.fillna(0)
 
-        
 
 
-    def cluster(self, meters, extDataSet, target_file, n_jobs = -1):
-        ''' The main clustering function.
 
-        Do it in a parallelized way to accellerate it. 
-        Take care that only households below a maximum consumption of 32kw are 
-        supported as we use 16bit integers.
-        To accellerate the process the calculation is performed in the following 
-        way: One thread is loading. One is doing the correlation. One is storing.
-        
-        Parameters:
-        meters: nilmtk.DataSet
+    def calculate_correlations(self, meters, extDataSet, n_jobs = -1, verbose = False):
+        ''' Function only setting up the correlations without clustering.
+        Sometimes it is also required to just get the correlations.
+
+        Parameters
+        ----------
+        meters: nilmtk.MeterGroup
             The meters to cluster, from which the demand is loaded.
         extDataSet: nilmtk.DataSet
             The External Dataset containing the fitting data.
-        target_file: string
-            Path to the file where the cluster results shall be stored.
         n_jobs: int
             ! Not used at the moment !
             Defines the amount of processes. (-1 = amount of cpu cores)
+        verbose: bool
+            Whether to print additional output
+
+        Returns
+        -------
+        correlations: pd.DataFrame
+            DataFrame with a column per external feature 
+            and a row for each meter.
         '''
 
-        # We need global variables if we want to use multiprocessing
+         # We need global variables if we want to use multiprocessing
         global current_loadseries
         global group_data
         global corrdataframe
@@ -187,42 +188,85 @@ class ExtCorrelationClusterer(Clusterer):
         min_sampling_period = min(periodsExtData + [self.model.params['self_corr_freq']]) * 2
 
         # Group the meters by there zip
+        metergroups = meters.groupby('zip', use_appliance_metadata = False)
+        processed_meters = 0
+        for zip in metergroups:
+            group = metergroups[zip]
+            # Load the groupspecific data (weather)
+            group_data = extDataSet.get_data_for_group(zip, group.get_timeframe(), 300, self.model.params['externalFeatures']) # min_sampling_period
+            # Then go through all meters
+            for processed_meters, meter in enumerate(group.meters):
+
+                # meters load (Und wieder auf kontinuierliche Zeitreihe bringen)
+                current_loadseries = meter.power_series_all_data(dtype='float16')#, load_kwargs={'sample_period':min_sampling_period})
+                if processed_meters == 0:
+                    self.set_up_corrdataframe(dims,self.model.params['weekdayFeatures'], self.model.params['hourFeatures'])
+                
+                #if processed_meters != 0:
+                #    newSeries = pd.Series(index = current_loadseries.asfreq('4s').index)
+                #    resampledload = current_loadseries.combine_first(newSeries)
+                #    resampledload = resampledload.interpolate()
+                #    current_loadseries = resampledload.resample('2min', how='mean')
+               
+                #pool = multiprocessing.Pool(processes=n_jobs)
+                #corr_vector = pool.map(correlate, dims)
+
+                corr_vector = []
+                t1 = time.time()
+                corr_vector = self.correlate()
+                corrs.loc[meter.identifier,:] = corr_vector
+                t2 = time.time()
+
+
+                if verbose:
+                    print('Correlation set up for {0} - {1}/{2}'.format(meter,processed_meters,len(group.meters)))
+        return corrs
+
+        
+
+
+    def cluster(self, meters, extDataSet, target_file, return_correlations = False, n_jobs = -1, verbose = False):
+        ''' The main clustering function.
+
+        Do it in a parallelized way to accellerate it. 
+        Take care that only households below a maximum consumption of 32kw are 
+        supported as we use 16bit integers.
+        To accellerate the process the calculation is performed in the following 
+        way: One thread is loading. One is doing the correlation. One is storing.
+        
+        Parameters
+        ----------
+        meters: nilmtk.MeterGroup
+            The meters to cluster, from which the demand is loaded.
+        extDataSet: nilmtk.DataSet
+            The External Dataset containing the fitting data.
+        target_file: string
+            Path to the file where the cluster results shall be stored.
+        return_correlations: pd.DataFrame
+            Also returns the correlations of the appliances towards the 
+            external features.
+        n_jobs: int
+            ! Not used at the moment !
+            Defines the amount of processes. (-1 = amount of cpu cores)
+        verbose: bool
+            Whether to print additional output
+
+        Returns
+        -------
+        clusterings: pd.DataFrame
+            A column for each cluster which only has one field, the list 
+            of all meters.
+        correlations: pd.DataFrame
+            Only when return_correlations==True
+            DataFrame with a column per external feature 
+            and a row for each meter.
+        '''
+        
+        # First calculate the correlations
         try:
             corrs = pckl.load(open("E:/coors.pckl",'rb'))
         except:
-            metergroups = meters.groupby('zip', use_appliance_metadata = False)
-            processed_meters = 0
-            for zip in metergroups:
-                group = metergroups[zip]
-                # Load the groupspecific data (weather)
-                group_data = extDataSet.get_data_for_group(zip, group.get_timeframe(), 300, self.model.params['externalFeatures']) # min_sampling_period
-                # Then go through all meters
-                for processed_meters, meter in enumerate(group.meters):
-
-                    # meters load (Und wieder auf kontinuierliche Zeitreihe bringen)
-                    current_loadseries = meter.power_series_all_data(dtype='float16')#, load_kwargs={'sample_period':min_sampling_period})
-                    if processed_meters == 0:
-                        self.set_up_corrdataframe(dims,self.model.params['weekdayFeatures'], self.model.params['hourFeatures'])
-                
-                    #if processed_meters != 0:
-                    #    newSeries = pd.Series(index = current_loadseries.asfreq('4s').index)
-                    #    resampledload = current_loadseries.combine_first(newSeries)
-                    #    resampledload = resampledload.interpolate()
-                    #    current_loadseries = resampledload.resample('2min', how='mean')
-               
-                    #pool = multiprocessing.Pool(processes=n_jobs)
-                    #corr_vector = pool.map(correlate, dims)
-
-                    corr_vector = []
-                    t1 = time.time()
-                    corr_vector = self.correlate()
-                    corrs.loc[meter.identifier,:] = corr_vector
-                    t2 = time.time()
-
-
-                    if self.model.config['verbose']:
-                        print('Correlation set up for {0} - {1}/{2}'.format(meter,processed_meters,len(group.meters)))
-            pckl.dump(corrs, open("coors.pckl",'wb'))
+            corrs = self.calculate_correlations(meters, extDataSet)
 
         # Do the clustering after the created vectors
         centroids, assignments  = self._cluster_vectors(corrs, 5)
@@ -235,7 +279,11 @@ class ExtCorrelationClusterer(Clusterer):
         result = corrs.reset_index().groupby('cluster').agg({'index':to_list})
         result.rename(columns={'index': 'elecmeters'})
         result.to_csv(target_file) # return result['index'] 
-        return result
+        
+        if return_correlations:
+            return result, corrs
+        else:
+            return result
 
 
         

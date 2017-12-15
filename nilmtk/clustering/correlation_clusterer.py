@@ -3,19 +3,16 @@ import numpy as np
 from pandas import DataFrame
 from .clusterer import Clusterer
 
+# Not used!
+
+
 class CorrelationClustererModel(object):
     params = {
         # The features which are used as input
         'externalFeatures': ['temperature', 'dewpoint', 'national', 'school'], #, 'time'
-        'shifts': list(range(1,5)),#48)), # +[cur*96 for cur in range(7)] + [cur*96*7 for cur in range(4)],
 
-        # Describes the amount of models which is used to do the forecasting.
-        # Each additional model is trained for a time, one step further in the
-        # future.
-        # Setting this to 1 means that only one 15 minute prediction is performed.
-        # To create a 24 hour forecasting series the amount_of_models has to be 
-        # set to 96.
-        'amount_of_models': 1,
+        # Shifts are the prev days
+        'shifts': list(range(1,5)),#48)), # +[cur*96 for cur in range(7)] + [cur*96*7 for cur in range(4)],
     }
 
 
@@ -25,9 +22,11 @@ class CorrelationClusterer(Clusterer):
     This is disaggregator which clusters all meters by their correlation 
     towards each other. That means, that meters with similar powerflows will
     end up in a group. The kind of correlation is chosen.
+
+    Attributes
     ----------
-    Attributes:
-    model_class : The model type, which belonging to the forecaster.
+    model_class: type  
+        The model type, which belonging to the clusterer.
     
     """
 
@@ -37,7 +36,12 @@ class CorrelationClusterer(Clusterer):
     def __init__(self, model = None):
         """
         Constructor of this class which takes an optional model as input.
-        If no model is given, it createsa default one.
+        If no model is given, it creates a default one.
+
+        Paramters
+        ---------
+        model: Model of type model_class
+            The model which shall be used.
         """
         super(CorrelationClusterer, self).__init__(model)
 
