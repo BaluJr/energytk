@@ -39,7 +39,7 @@ class AnnLstmForecasterModel(Sequence):
         The scaler used to scale the labels.
 
     Attributes per horizon
-    ----------
+    ----------------------
     trainer: cntk.train.Trainer
         The trainer used for the model
     ann_input: C.input_variable
@@ -50,34 +50,30 @@ class AnnLstmForecasterModel(Sequence):
         The tensorboard writer to write the data to.
     model: C
         The model z, which is also included in the trainer. But since the reloading is not yet 
-        working properly, also store it separatly.
+        working properly, also stored separatly.
     plotdata: {"batchnumber":[], "loss":[], "error":[], "avg_power":[]}
         This is the buffer for storing the training results. Has been more or less replaced by the
         Tensorflow progress writer.
     '''
 
     params = {
-        # The target storage to store the data to
-        'forecasting_storage': "C:\\Users\\maxim_000\\Documents\\InformatikStudium_ETH\\Masterarbeit\\6_Data\\Tmp\\forecasting.hdf",
-        
         # Which timesteps into the future we predict
-        'models': [1] + list(range(2, 92, 2)),
+        'models': [72], #list(range(8, 97, 8)), #[1] + list(range(2, 92, 12)),
         
         # Amount of data used for validation
         'validation_quota': 0.1,
 
-        # Define output
-        'training_progress_output_freq': 50,
-
         # Learning Rate
-        'learning_rate': 0.005,
+        'learning_rate': 0.01,
 
         # How many errors are taken together until training step
         'size_minibatches': 10,
         
         # Whether to use (100 for is_fast, else 2000)
-        'epochs': 1,
+        'epochs': 100,
 
+        # Resolution of one step
+        'resolution': '15m',
 
         # Dimensionality of LSTM cell
         'lstm_h_dim': 10,
@@ -86,23 +82,23 @@ class AnnLstmForecasterModel(Sequence):
         'lstm_dim': 10,
         
         # How far to the past the network looks
-        'lstm_horizon': 192,
+        'lstm_horizon': 96 * 7,
             
         # The features which are used as input (for the dense ANN)
         'lstm_external_features': [], #('temperature', '')],#, ('national', ''), ('school', '')],#, ('dewpoint', '')], #, 'time'
         
         # How the daytime is regarded (for the dense ANN)
-        'lstm_hourFeatures': [],#('hour', '00-06'), ('hour', "06-09"), ('hour', "09-12"), ('hour', "12-15"), ('hour', "15-18"), ('hour', "18-21"), ('hour', "21-24")],
+        'lstm_hourFeatures': [('hour', '00-06'), ('hour', "06-09"), ('hour', "09-12"), ('hour', "12-15"), ('hour', "15-18"), ('hour', "18-21"), ('hour', "21-24")],
 
         # How the weekdays are paired (for the dense ANN)
-        'lstm_weekdayFeatures': [],#('week', "0-5"),('week', "5-6"),('week',"6-7")],
+        'lstm_weekdayFeatures': [('week', "0-5"),('week', "5-6"),('week',"6-7")],
 
 
         # The hidden layers of the dense ANN
         'ann_num_hidden_layers': 2,
 
         # Dimensionality of the dense ANNs hidden layers
-        'ann_hidden_layers_dim': 50,
+        'ann_hidden_layers_dim': 20,
         
         # The features which are used as input (for the dense ANN)
         'ann_external_features': [],#('temperature', '')],#, ('national', ''), ('school', '')],#, ('dewpoint', '')], #, 'time'
@@ -117,8 +113,8 @@ class AnnLstmForecasterModel(Sequence):
         # Unfortunately lstm debug not yet working in CNTK 2.2
         'debug' : False,
         
-        # The folder where the tensorflow logs are placed
-        'tensorboard_dict': "E:Tensorboard/"
+        # Define output
+        'training_progress_output_freq': 50
     }
     
 
@@ -135,8 +131,10 @@ class AnnLstmForecasterModel(Sequence):
             self.params[arg] = args[arg]
         self.model = [
             {'trainer':None, 
-                'input':None, 
-                'labels':None, 
+                'ann_input':None, 
+                'lstm_input':None, 
+                'label':None, 
+                'model':None,
                 'plotdata': {"batchnumber":[], "loss":[], "error":[], "avg_power":[]}
             }] * len(self.params['models'])
     
@@ -199,20 +197,24 @@ class AnnLstmForecasterModel(Sequence):
         '''
         # Cancel if folder already exists and contains elements
         if os.path.isdir(folder):
-            if len(os.listdir("E:/Tensorboard/0")) != 5:
-                raise Exception("Folder must be empty.")
+            pass
+            #if len(os.listdir("E:/Tensorboard/0")) != 5:
+            #    raise Exception("Folder must be empty.")
         else:
             os.mkdir(folder)
 
         # Store the cntk model and remove
         for i, cur in enumerate(self):
             cur["trainer"].save_checkpoint(folder + str(i) + "/.trainer")
-            del cur['trainer']
-            del cur[' ann_input']
-            del cur['lstm_input']
-
+        del cur['trainer']
+        del cur['ann_input']
+        del cur['lstm_input']
+        del cur['label']
+        del cur['model']
+        del cur['tensorboard_writer']
         # The rest can be pickled normally 
-        pckl.dump(self, open(folder+ "model", "wb")) 
+        pckl.dump(self, open(folder+ "basemodel", "wb")) 
+        pckl.dump(self, open(folder+ "basemodel", "wb")) 
     
 
     def load(folder):
@@ -228,7 +230,7 @@ class AnnLstmForecasterModel(Sequence):
 
         # First reload the base model
         try:
-            model = pckl.load(open(folder+ "/basemodel", "rb")) 
+            model = pckl.load(open(folder+ "basemodel", "rb")) 
         except:
             model = AnnLstmForecasterModel()
         
@@ -241,8 +243,10 @@ class AnnLstmForecasterModel(Sequence):
             #cur["trainer"].restore_from_checkpoint(folder + str(i) + "/.trainer")
             #cur['ann_input'] = cur["trainer"].model['ann_input']
             #cur['lstm_input'] = cur['trainer'].model['lstm_input']
-
         return model
+
+
+
 
 
 class AnnLstmForecaster(Forecaster):
@@ -260,7 +264,6 @@ class AnnLstmForecaster(Forecaster):
     
     # The related model
     model_class = AnnLstmForecasterModel
-    
 
     def __init__(self, model = None, folder = None):
         """
@@ -305,7 +308,7 @@ class AnnLstmForecaster(Forecaster):
             chunk = self._add_external_data(chunk, ext_dataset, external_features)
         return chunk
 
-    def _model_creation(self, modelnumber):
+    def _model_creation(self, modelnumber, tensorboard_folder):
         """ Create the model for time series prediction.
         Since there are multiple models, the parameter defines 
         the number of the model.
@@ -314,22 +317,24 @@ class AnnLstmForecaster(Forecaster):
         ----------
         modelnumber: int
             Forecasting horizon this model is trained for.
+        tensorboard_folder: str
+            path where the tensorboard output shall be stored.
         """
         
         # Define input
         params = self.model.params
         lstm_input_dim = 1 + len(params['lstm_external_features']) + len(params['lstm_hourFeatures']) + len(params['lstm_weekdayFeatures'])
-        self.model[modelnumber]['lstm_input'] = lstm_input = C.sequence.input_variable(shape=lstm_input_dim, is_sparse = False, name="lstm_input")     # Das fuegt glaube sofort schon eine Dyn Achse ein
+        self.model[modelnumber]['lstm_input'] = lstm_input = C.sequence.input_variable(shape=lstm_input_dim, is_sparse = False, name="lstm_input")
 
         ann_input_dim = len(params['ann_external_features']) + len(params['ann_hourFeatures']) + len(params['ann_weekdayFeatures'])
-        self.model[modelnumber]['ann_input'] = ann_input = C.input_variable(shape=ann_input_dim, is_sparse = False, name="ann_input")     # Das fuegt glaube sofort schon eine Dyn Achse ein
+        self.model[modelnumber]['ann_input'] = ann_input = C.input_variable(shape=ann_input_dim, is_sparse = False, name="ann_input")
 
         # Create the network
         with C.layers.default_options(initial_state = 0.1):
             # First the lstm
             lstm = C.layers.Recurrence(C.layers.LSTM(self.model.params['lstm_dim'], self.model.params['lstm_h_dim'], name="recur"))(lstm_input)
             lstm = C.sequence.last(lstm, name="recurlast")
-            lstm = C.layers.Dropout(0.1, name="dropout")(lstm)
+            #lstm = C.layers.Dropout(0.1, name="dropout")(lstm)
             # Combine with external data
             h = C.splice(ann_input, lstm, name = 'combination')
             # Create a dense network in behind
@@ -349,9 +354,12 @@ class AnnLstmForecaster(Forecaster):
         lr_schedule = C.learning_rate_schedule(params['learning_rate'], C.UnitType.minibatch)
         momentum_time_constant = C.momentum_as_time_constant_schedule(params['size_minibatches'] / -math.log(0.9)) 
         learner = C.fsadagrad(z.parameters, lr = lr_schedule, momentum = momentum_time_constant)
-        tensorboard_writer = TensorBoardProgressWriter(freq=10, log_dir=self.model.params['tensorboard_dict'] + str(modelnumber) + "/", model=z)
-        self.model[modelnumber]['trainer']  = C.Trainer( z, (loss, error), [learner], tensorboard_writer )
-        self.model[modelnumber]['tensorboard_writer']  = tensorboard_writer 
+        if not tensorboard_folder is None:
+            tensorboard_writer = TensorBoardProgressWriter(freq=10, log_dir=tensorboard_folder + str(modelnumber) + "/", model=z)
+            self.model[modelnumber]['tensorboard_writer']  = tensorboard_writer 
+            self.model[modelnumber]['trainer']  = C.Trainer( z, (loss, error), [learner], tensorboard_writer)
+        else:
+            self.model[modelnumber]['trainer']  = C.Trainer( z, (loss, error), [learner])
         self.model[modelnumber]['model'] = z
 
     def _arrange_features_and_labels(self, chunk, for_forecast = False):
@@ -382,32 +390,32 @@ class AnnLstmForecaster(Forecaster):
         ann_features = chunk[ann_features].values
         lstm_features = params['lstm_external_features'] + params['lstm_hourFeatures'] + params['lstm_weekdayFeatures'] + [('power','active')]
         lstm_features = chunk[lstm_features].values
+        
         if for_forecast:
-            # Nur Temporaer da gleicher Datensatz wie training - Remove later
+            ## Nur Temporaer da gleicher Datensatz wie training - Remove later
             self.model.ann_featurescaler = StandardScaler()
             self.model.ann_featurescaler.fit(ann_features)    
             self.model.lstm_featurescaler = StandardScaler()
             self.model.lstm_featurescaler.fit(lstm_features)
             self.model.labelscaler = StandardScaler()
             self.model.labelscaler.fit(chunk[('power','active')].values)
-            # Ende remove
+            ## Ende remove
             ann_features = self.model.ann_featurescaler.transform(ann_features)    
             lstm_features = self.model.lstm_featurescaler.transform(lstm_features)   
             return ann_features, lstm_features
-        else:
-            self.model.ann_featurescaler = scaler = StandardScaler()
-            self.model.lstm_featurescaler = scaler = StandardScaler()
-            ann_features = scaler.fit_transform(ann_features)    
-            lstm_features = scaler.fit_transform(lstm_features)        
-
-        #training_features = list(np.expand_dims(training_features,2))
-        self.model.labelscaler = scaler = StandardScaler()
+        
         labels = chunk[('power','active')].values
+        self.model.ann_featurescaler = scaler = StandardScaler()
+        self.model.lstm_featurescaler = scaler = StandardScaler()
+        self.model.labelscaler = scaler = StandardScaler()
+        ann_features = scaler.fit_transform(ann_features)    
+        lstm_features = scaler.fit_transform(lstm_features)        
         labels = scaler.fit_transform(labels)
         labels = np.expand_dims(labels, 2)
         return ann_features, lstm_features, labels
 
-    def train(self, meters, ext_dataset, section = None, verbose = False):
+
+    def train(self, meters, ext_dataset, section = None, tensorboard_folder = None, verbose = False):
         '''
         Does the training of the neural network. Each load chunk is translated into 
         multiple minibatches used for training the network.
@@ -422,6 +430,8 @@ class AnnLstmForecaster(Forecaster):
             Alternatively a path to a PickleFile. 
         section: nilmtk.TimeFrame
             The timeframe used for training. Meters have to be valid within this region.
+        tensorboard_folder: str
+            path where the tensorboard output shall be stored.
         verbose: bool
             Whether additional output shall be printed during training.
         '''
@@ -436,7 +446,7 @@ class AnnLstmForecaster(Forecaster):
         # C) Create the model
         models = self.model.params['models']
         for modelnumber in range(len(models)):
-            self._model_creation(modelnumber)
+            self._model_creation(modelnumber, tensorboard_folder)
 
         # D) Arrange the input for LSTM and ANN and labels
         ann_features, lstm_features, labels = self._arrange_features_and_labels(chunk)
@@ -469,12 +479,16 @@ class AnnLstmForecaster(Forecaster):
                 if i % params['training_progress_output_freq'] == 0:
                     self._track_training_progress(modelnumber, horizon , i, ann_features, lstm_features, labels, testing_indexes, verbose = verbose)
 
-            self.model[modelnumber]['trainer'].model.save("E:Tensorboard/" + str(modelnumber) + "/model.dnn")
+            self.model[modelnumber]['trainer'].model.save(tensorboard_folder + str(modelnumber) + "/model.dnn")
             self.model[modelnumber]['tensorboard_writer'].flush()
-            open("E:Tensorboard/" + str(modelnumber) + "/" + str(horizon) ,"w+").close()
-            self.model[modelnumber]['trainer'].save_checkpoint("E:Tensorboard/" + str(modelnumber) + "/lstm.checkpoint")
+            open(tensorboard_folder + str(modelnumber) + "/" + str(horizon) ,"w+").close()
+            self.model[modelnumber]['trainer'].save_checkpoint(tensorboard_folder + str(modelnumber) + "/lstm.checkpoint")
             print("Training took {:.1f} sec".format(time.time() - start))
         
+        self.model.store(tensorboard_folder)
+        tmp = open(tensorboard_folder + "/model.txt" ,"w+")
+        tmp.write(str(self.model.params))
+        tmp.close()
         return self.model
 
 
@@ -529,15 +543,15 @@ class AnnLstmForecaster(Forecaster):
             # Put together the features an labels
             cur_lstm_input = []
             for item in items:
-                cur_lstm_input.append(lstm_features[item-horizon-params['lstm_horizon']:item-horizon])
-            cur_ann_input = ann_features[items]            
+                cur_lstm_input.append(lstm_features[item-params['lstm_horizon']:item])
+            cur_ann_input = ann_features[items + horizon]            
             
             z = cur['model']
             pred = z(cur_ann_input, cur_lstm_input) #z.eval({ann_features: cur_ann_input, lstm_input: cur_lstm_input})
             forecast[horizon] = self.model.labelscaler.inverse_transform(pred[:, 0])
         
         forecast = forecast.transpose()
-        forecast['horizon'] = forecast.index.values * pd.Timedelta('15min')
+        forecast['horizon'] = forecast.index.values * pd.Timedelta(params['resolution'])
         forecast = forecast.set_index('horizon')
         return forecast
 
