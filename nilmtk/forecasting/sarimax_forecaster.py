@@ -8,6 +8,7 @@ from io import BytesIO
 from nilmtk import TimeFrame, TimeFrameGroup
 import pickle as pckl
 from sklearn.preprocessing import StandardScaler
+import numpy as np
 
 class SarimaxForecasterModel(object):
     '''
@@ -24,18 +25,18 @@ class SarimaxForecasterModel(object):
 
     params = {
         # The number of lag observations included in the model, also called the lag order.
-        'p': 2,
+        'p': 1,
         #The number of times that the raw observations are differenced, also called the degree of differencing.
         'd': 1,
         #The size of the moving average window, also called the order of moving average
-        'q': 3,
+        'q': 1,
 
         # Seasonal
-        'P': 2,
+        'P': 1,
         # Seasonal
         'D': 1,       
         # Seasonal
-        'Q': 3,       
+        'Q': 1,       
 
         # Seasonal
         'S': 96,
@@ -91,7 +92,7 @@ class SarimaxForecaster(Forecaster):
         return load
 
 
-    def forecast(self, meters, ext_dataset, horizon = pd.Timedelta('1d'), return_residuals=False, verbose = False):
+    def forecast(self, meters, ext_dataset, timestamps, horizon = 96, return_residuals=False, verbose = False):
         '''
         Does the forecasting for an ARIMA model. As the model is only valid 
         for a certain dataset and cannot be generalized, 
@@ -104,7 +105,10 @@ class SarimaxForecaster(Forecaster):
         ext_dataset: nilmtk.DataSet or str
             The External Dataset containing the fitting data.
             Alternatively a path to a PickleFile. 
-        horizon: pd.Timedelta (optional)
+        timestamps: pd.Timestamp, [pd.TimeStamp,...] or pd.DatetimeIndex
+            A single point or a list of points for which the forecasting is performed.
+            All contained model horizonts are applied to each point in time.
+        horizon: int (optional)
             The horizon in the future to forecast for.
         return_residuals: bool (optional)
             Whether to return the residuals as additional information
@@ -113,40 +117,49 @@ class SarimaxForecaster(Forecaster):
         '''
 
         params = self.model.params
+        forecasts = pd.DataFrame(columns = timestamps)
         
         # Load and preprocess the data
-        chunk = self._load_data(meters)
-        chunk = self._stationary_data(chunk)
-        chunk = chunk[-params['trainingdata_limit']:]
+        data = self._load_data(meters)
+        data= self._stationary_data(data)
 
-        ext_chunk, ext_chunk_future = None, None
-        if not params['external_feature'] is None:
-            ext_chunk = self._add_external_data(chunk.index, ext_dataset, [params['external_feature']], horizon)
-            ext_chunk, ext_chunk_future = ext_chunk[:chunk.index[-1]], ext_chunk[chunk.index[-1]:]
-            ext_chunk = ext_chunk[-params['trainingdata_limit']:]
+        for timestamp in timestamps:
+            loc = data.index.get_loc(timestamp)
+            chunk = data[loc-params['trainingdata_limit']:loc]
 
-        # Fit the model if not already done
-        model = SARIMAX(endog = chunk, order=(params['p'],params['d'],params['q']), 
-                        seasonal_order = (params['P'],params['D'],params['Q'], params['S']), 
-                        enforce_stationarity = False, enforce_invertibility = False)#, exog = ext_chunk)
-        self.model.model_sarimax = model
-        model_fit = model.fit(disp=verbose)
-        if return_residuals:
-            residuals = DataFrame(model_fit.resid)
+            ext_chunk, ext_chunk_future = None, None
+            if not params['external_feature'] is None:
+                ext_chunk = self._add_external_data(chunk.index, ext_dataset, [params['external_feature']]) # horizon)
+                ext_chunk, ext_chunk_future = ext_chunk[:chunk.index[-1]], ext_chunk[chunk.index[-1]:]
+                ext_chunk = ext_chunk[-params['trainingdata_limit']:]
 
-        # Do a forecast for so far unknown region and scale back
-        forecast = model_fit.predict(start=len(data), end=len(data)+horizon, dynamic=True, exog = ext_chunk_future)
-        
-        # Print the summaries if verbose
-        if verbose == True:
-            print(model_fit.summary())
+            # Fit the model if not already done
+            model = SARIMAX(endog = chunk, order=(params['p'],params['d'],params['q']), 
+                            seasonal_order = (params['P'],params['D'],params['Q'], params['S']), 
+                            enforce_stationarity = False, enforce_invertibility = False)#, exog = ext_chunk)
+            self.model.model_sarimax = model
+            model_fit = model.fit(disp=verbose)
             if return_residuals:
-                print(residuals.describe())
+                residuals = DataFrame(model_fit.resid)
 
+            # Do a forecast for so far unknown region and scale back
+            forecast = model_fit.predict(start=len(chunk), end=len(chunk)+horizon, dynamic=True)# exog = ext_chunk_future)
+            forecast = self.model.standardscaler.inverse_transform(forecast)
+            forecasts[timestamp] = pd.Series(data = forecast[1:])
+
+            # Print the summaries if verbose
+            if verbose == True:
+                print(model_fit.summary())
+                if return_residuals:
+                    print(residuals.describe())
+                            
+        
+        forecasts['horizon'] = forecasts.index.values * pd.Timedelta('15m')
+        forecasts = forecasts.set_index('horizon')
         if return_residuals:
-            return forecast, residuals
+            return forecasts, residuals
         else:
-            return forecast
+            return forecasts
 
         
     def test(self):

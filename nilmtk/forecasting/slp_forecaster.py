@@ -41,13 +41,18 @@ class SlpForecaster(object):
     """ Forecastr based on the official standard H0 load profiles.
     This forecaster works the same as the grid operators. It takes each building and applies a 
     standard load profiles. Currently the default H0 profile for domestic homes is used.
+
+    Attributes
+    ----------
+    verbose: bool
+        Wheteher additional output shall be given during any function.
     """
 
     Requirement = {'building_type':'ANY VALUE'}
 
     model_class = SlpForecasterModel
 
-    def __init__(self, model = None):
+    def __init__(self, model = None, verbose = False):
         """
         Constructor of this class which takes an optional model as input.
         If no model is given, it createsa default one.
@@ -70,7 +75,7 @@ class SlpForecaster(object):
         col = pd.MultiIndex.from_tuples(tuples, names=['Season', 'Day'])
         idx = pd.DatetimeIndex(start="1.1.2017", freq='15min', periods=96)
         self.profiles = pd.DataFrame(np.array([m.WEEK_SUMMER, m.SAT_SUMMER, m.SUN_SUMMER, m.WEEK_WINTER, m.SAT_WINTER, m.SUN_WINTER, m.WEEK_INTER, m.SAT_INTER, m.SUN_INTER]).T, columns=col, index = idx)
-        
+        self.verbose = verbose
 
     def plot(self):
         ''' Plots the used standard load profiles. 
@@ -89,30 +94,40 @@ class SlpForecaster(object):
         i = 1
 
 
-    def forecast(self, annual_power, timestamps):
+
+    
+    def _forecast_single(self, annual_power, timestamp, horizon = None, resolution = "15m"):
         '''
-        Returns the power for a certain timestamp in Watts.
+        Helpfunction encapsulating the forecast of a single timestamp 
+        with horizon.
         
         Parameters
         ----------
         annual_power: 
             The annual_power of the household timeline to predict in KWh/a
-        timestamps: [pd.TimeStamp,...] or pd.DatetimeIndex
+        timestamp: pd.TimeStamp,...
             The point for which a prognoses shall be done.
+        horizon: pd.Timedelta
+            If set, the amount of points into the future starting 
+            from each timestamp in timestamps.
+        resolution: str
+            A freq_str representing the frequency with which results
+            are returned.
 
         Returns
         -------
         forecast: pd.Series
-            The produced forecast in kW. 
-            Series contains one entry per input timestamp.
+            The produced forecast in kW for the horizont after the timestamp
+            in the defined resolution.
         '''
         m = self.model
         profiles = self.profiles 
         predictions = pd.Series()
-
+        timestamps = pd.date_range(timestamp, timestamp + horizon, freq=resolution)
+        n = len(timestamps)
         for i, day in enumerate(timestamps):
-            if i % 96 == 0:
-                print(i/96)
+            if self.verbose and i % 10 == 0:
+                print("Forecast: {0}/{1}".format(i,n))
 
             # Calculate the season interpolation factors
             dayOfYear = day.dayofyear
@@ -157,5 +172,42 @@ class SlpForecaster(object):
             result *= m.DAY_FACTORS[day.dayofyear-1]
             result *= annual_power
             predictions.loc[day] = result
-
         return predictions
+
+
+    def forecast(self, annual_power, timestamps, horizon = pd.Timedelta('1d'), resolution = "15min"):
+        '''
+        Returns the power for a certain timestamp in Watts.
+        
+        Parameters
+        ----------
+        annual_power: 
+            The annual_power of the household timeline to predict in KWh/a
+        timestamps: [pd.TimeStamp,...] or pd.DatetimeIndex
+            The point for which a prognoses shall be done.
+        horizont: pd.Timedelta
+            If set, the amount of points into the future starting 
+            from each timestamp in timestamps.
+        resolution: str
+            A freq_str representing the frequency with which results
+            are returned.
+
+        Returns
+        -------
+        forecast: pd.DataFrame
+            A dataframe with a column for each timestamp in timestamps.
+        '''
+        m = self.model
+        profiles = self.profiles 
+        forecasts = pd.DataFrame(columns = timestamps)
+        n = len(timestamps)
+        for i, day in enumerate(timestamps):
+            if self.verbose:
+                print("Forecast new Timestamp: {0}/{1}".format(i,n))
+            forecast = self._forecast_single(annual_power, day, horizon, resolution)
+            forecast.index -= day
+            forecasts[day] = forecast
+        
+        forecasts.index.name = 'horizon'# = forecasts.index.values * pd.Timedelta(resolution)
+        #forecasts = forecasts.set_index('horizon')
+        return forecasts

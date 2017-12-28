@@ -1,4 +1,7 @@
-
+import numpy as np
+import pandas as pd 
+from nilmtk import TimeFrame
+import datetime
 
 class GaussianStateMachines(object):
     """
@@ -9,17 +12,26 @@ class GaussianStateMachines(object):
     The signatures of all the appliances are superimposed to yield a final load profile.
     """
 
-    def simulate(self, appliance_specs, duration = = 8640000):
+    def simulate(self, output_datastore, appliance_specs = None, duration = 8640000):
         '''
         Performs the simulation of a defined interval of load profile.
         The style of the output is heavily linked to the EventbasedCombination
         disaggregator.
+        The target file is filled with submeters for each appliance and a single 
+        site_meter.
 
         Parameters
         ----------
+        appliance_specs: 
+            The specification of the appliances. See the default appliances 
+            created in the constructor to have a description of the default
+            format
+        target_file: str
+            The path to the file where the powerflow shall be created.
         duration: pd.Timedelta
             Circa duration of the created load profile.
             Default 100 days
+        
         Returns
         -------
         transients: pd.DataFrame
@@ -27,20 +39,19 @@ class GaussianStateMachines(object):
         steady_states: pd.DataFrame
             The steady states of the load profile
         '''
-
+        
         # Each entry is Means,(transient, spike, duration), StdDevs
         # Pay attention: No cutting, results must be over event treshold
         specs =[[((2000, 20, 10), (20, 10, 4)), ((-2000, 10, 15), (10, 3, 4))],                # Heater 1
                 [((1500, 30, 14), (10, 15, 4)), ((-1500, 10, 15), (10, 20, 4))],               # Heater 2
                 [((130, 10, 90), (10, 5, 30)),  ((-130, 10, 600), (10, 6, 100))],              # Fridge
                 [((300, 0, 60*60),(10, 5, 10)), ((-300, 0, 60*60*10),(10, 5, 10))],
-                [((40, 0, 50), (6, 1, 10)),      ((120, 0, 40), (15, 1, 10)),    ((-160, 20, 200), (10, 1, 30))],
-                [((100, 0, 40), (10, 5, 10)),     ((-26, 0, 180), (5, 1, 50)),    ((-74,5, 480), (15,1,50))]]
+                [((40, 0, 50), (6, 1, 10)),     ((120, 0, 40), (15, 1, 10)),    ((-160, 20, 200), (10, 1, 30))],
+                [((100, 0, 40), (10, 5, 10)),   ((-26, 0, 180), (5, 1, 50)),    ((-74,5, 480), (15,1,50))]]
         # Breaks as appearances, break duration, stddev
         break_spec = [[4, 60, 10], [6, 10*60,10], [7, 10*60,10], [2, 60,10], [4, 60, 10], [2, 60, 10]]
         for i, bs in enumerate(break_spec): 
             bs[0] = bs[0]*len(specs[i])
-
 
         # Generate powerflow for each appliance
         appliances = []
@@ -70,11 +81,127 @@ class GaussianStateMachines(object):
             appliance.loc[appliance['active transition'] >= 0, 'signature'] = appliance['active transition'] + appliance['spike']
             appliance['original_appliance'] = i
             appliances.append(appliance)
+        
+        # Create the overall powerflow as mixture of single appliances
         transients = pd.concat(appliances, verify_integrity = True)
         transients = transients.sort_index()
+        
+        # Write into file
+        building_path = '/building{}'.format(1)
+        for appliance in range(len(appliances)):
+            key = '{}/elec/meter{:d}'.format(building_path, appliance + 2)
+            appliances[appliance]['active transition'] = appliances[appliance]['active transition'].cumsum()
+            output_datastore.append(key, appliances[appliance][['active transition','spike']].rename(columns={'active transition':('power', 'active')}))
+        output_datastore.append('{}/elec/meter{:d}'.format(building_path, 1), transients[['active transition','spike']].rename(columns={'active transition':('power', 'active')}))
+        num_meters = len(appliances) + 1
+
+        # Write the metadata
+        timeframe = TimeFrame(start = transients.index[0], end = transients.index[-1])
+        self._save_metadata_for_disaggregation(output_datastore, timeframe, num_meters)
+
+        # The immediate result
         steady_states = transients[['active transition']].cumsum()#.rename({'active transition':'active average'})
         steady_states[['active transition']] += 60
-
+        transients = transients[['active transition', 'spike', 'signature', 'ends']]
         return transients, steady_states
+    
+        
+    def _save_metadata_for_disaggregation(self, output_datastore, timeframe, num_meters):
+        """ 
+        Stores the metadata within the storage.
 
+        REMINDER: Also urpruenglich wollte ich das anders machen und eben auch die Metadatan mit abspeichern.
+                  Habe ich aus zeitgruenden dann gelassen und mache es doch so wie es vorher war.
+        
+        This function first checks whether there are already metainformation in the file.
+        If zes, it extends them and otherwise it removes them.
 
+        Note that `self.MODEL_NAME` needs to be set to a string before
+        calling this method.  For example, we use `self.MODEL_NAME = 'CO'`
+        for Combinatorial Optimisation.
+
+        TODO:`preprocessing_applied` for all meters
+        TODO: submeter measurement should probably be the mains
+              measurement we used to train on, not the mains measurement.
+
+        Parameters
+        ----------
+        output_datastore : nilmtk.DataStore subclass object
+            The datastore to write metadata into.
+        timeframe : list of nilmtk.TimeFrames or nilmtk.TimeFrameGroup
+            The TimeFrames over which this data is valid for.
+        num_meters : [int]
+            Required if `supervised=False`, Gives for each phase amount of meters
+        """
+
+        # Global metadata
+        meter_devices = {
+            'synthetic' : {
+                'model': "Synth",
+                'sample_period': 0, # Makes it possible to use special load functionality
+                'max_sample_period': 1,
+                'measurements': [{
+                    'physical_quantity': 'power',
+                    'type': 'active'
+                }]
+            }}
+        date_now = datetime.datetime.now().isoformat().split('.')[0]
+        dataset_metadata = {
+            'name': "Synthetic Gaussian Statemachine",
+            'date': date_now,
+            'meter_devices': meter_devices,
+            'timeframe': timeframe.to_dict()
+        }
+        output_datastore.save_metadata('/', dataset_metadata)
+
+        # Building metadata always stored for the new buildings
+        phase_building = 1
+        building_path = '/building{}'.format(phase_building)
+        mains_data_location = building_path + '/elec/meter1'
+
+        # Main meter is sum of all single appliances:
+        elec_meters = {}
+        elec_meters[1] = {
+            'device_model': 'synthetic',
+            'site_meter': True,
+            'data_location': mains_data_location,
+            'preprocessing_applied': {},  # TODO
+            'statistics': {
+                'timeframe': timeframe.to_dict()
+            }
+        }
+        
+        def update_elec_meters(meter_instance):
+            elec_meters.update({
+                meter_instance: {
+                    'device_model': 'synthetic', # self.MODEL_NAME,
+                    'submeter_of': 1,
+                    'data_location': (
+                        '{}/elec/meter{}'.format(
+                            building_path, meter_instance)),
+                    'preprocessing_applied': {},  # TODO
+                    'statistics': {
+                        'timeframe': timeframe.to_dict()
+                    }
+                }
+            })
+
+        # Appliances and submeters:
+        appliances = []
+        # Submeters (Starts at 2 because meter 1 is mains and 0 not existing)
+        for chan in range(2, num_meters):
+            update_elec_meters(meter_instance=chan)
+            appliance = {
+                'meters': [chan],
+                'type': 'unknown',
+                'instance': chan - 1
+            }
+            appliances.append(appliance)
+
+        building_metadata = {
+            'instance': (phase_building),
+            'elec_meters': elec_meters,
+            'appliances': appliances,
+        }
+        output_datastore.save_metadata(building_path, building_metadata)
+   

@@ -58,7 +58,7 @@ class ReferenceForecaster(Forecaster):
         return orginal_load.dropna()
 
 
-    def forecast(self, meters, ext_dataset, timestamps, horizon = pd.Timedelta('1d'), verbose = False):
+    def forecast(self, meters, ext_dataset, timestamps, horizon = pd.Timedelta('1d'), resolution = "15m", verbose = False):
         '''
         This method uses the learned model to predict the future
         For each forecaster the forecast horizon is derived from its 
@@ -77,6 +77,9 @@ class ReferenceForecaster(Forecaster):
             All contained model horizonts are applied to each point in time.
         horizon: pd.Timedelta (optional)
             The horizon in the future to forecast for.
+        resolution: str
+            A freq_str representing the frequency with which results
+            are returned.
         verbose: bool (optional)
             Whether additional output shall be printed during training.
 
@@ -97,6 +100,8 @@ class ReferenceForecaster(Forecaster):
 
         # Forecast
         for timestamp in timestamps:
-            forecast[timestamp] = chunk[timestamp: timestamp + pd.Timedelta('1d')].reset_index(drop=True)
-        
+            forecast[timestamp] = chunk[timestamp: timestamp + horizon].reset_index(drop=True)
+            
+        forecast['horizon'] = forecast.index.values * pd.Timedelta(resolution)
+        forecast = forecast.set_index('horizon')
         return forecast

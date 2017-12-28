@@ -677,7 +677,7 @@ def calculate_metrics_per_appliances(metrics, prediction, ground_truth, prematch
         If additional output shall be given.
     '''
     for metric in metrics:
-        if not "single" in metrics_dictionary[metric]["usecase"]:
+        if not "one" in metrics_dictionary[metric]["usecase"]:
             raise Exception("Metric " + metrics_dictionary[metric]["lbl"] +
                             "can only be used for the overall powerflow")
 

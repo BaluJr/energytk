@@ -7,6 +7,8 @@ from nilmtk.processing import Processing
 import pandas as pd 
 import cntk as C
 import pickle as pckl
+import numpy as np
+import itertools
 
 class ForecasterModel(object):
     '''
@@ -106,6 +108,7 @@ class Forecaster(Processing):
         return C.reduce_mean(C.abs(z - l))
 
     
+
     def _load_data(self, meters, section = None):
         ''' Loads data from the given source.
         
@@ -133,6 +136,38 @@ class Forecaster(Processing):
         else:
             chunk = pd.DataFrame(pckl.load(open(meters, "rb"))).bfill().ffill() 
         return chunk
+
+
+    
+    def generate_random_data_sample(sample_size, feature_dim, num_classes):
+        ''' Create synthetic data for classification using NumPy.
+        Currently not in use any more. Handy for setup of forecasters to 
+        have something.
+        sample_size: int
+            Amount of samples to generate
+        feature_dim: int
+            Amount of dimensions the data has
+        num_classes:
+            Amount of different classes appearing as labels.
+
+        Returns
+        -------
+        X: np.ndarray
+            The generated input features
+        Y: np.ndarray
+            The generated labels
+        '''
+        Y = np.random.randint(size=(sample_size, 1), low=0, high=num_classes)
+
+        # Make sure that the data is separable
+        X = (np.random.randn(sample_size, feature_dim)+3) * (Y+1)
+        X = X.astype(np.float32)
+        # converting class 0 into the vector "1 0 0",
+        # class 1 into vector "0 1 0", ...
+        class_ind = [Y==class_number for class_number in range(num_classes)]
+        Y = np.asarray(np.hstack(class_ind), dtype=np.float32)
+        return X, Y
+
 
 
     #region Data augmentation help functions
@@ -163,9 +198,7 @@ class Forecaster(Processing):
         '''
         # Determine the shifts that are required
         chunk = chunk.copy()
-        all_shifts = set()
-        for shift in shifts:
-            all_shifts.update(range(shift, shift + model_horizons))
+        all_shifts = set(np.array(list(itertools.product(past_shifts, model_horizons))).sum(1))
 
         # Create the shifts and return
         for i in all_shifts:
@@ -211,6 +244,34 @@ class Forecaster(Processing):
             chunk[idx] = chunk[idx].apply(lambda e, hog = hours_of_group: e in hog)
         return chunk
 
+    
+    def _add_continuous_time_related_features(self, chunk):
+        ''' Add the time related features.
+        Todo: one could also include the day of year when using longer training
+        periods.
+
+        Paramters
+        ---------
+        chunk: pd.DataFrame
+            The input which have to be augmented 
+        weekday_features: [indexes, ...]
+            For the layout of the indexes have a look for the weekday_features in the 
+            parameters of lstm_forecaster.
+        hour_features: [indexes, ...]
+            For the layout of the indexes have a look for the hour_features in the 
+            parameters of lstm_forecaster.
+
+        Returns
+        -------
+        chunk: pd.DataFrame
+            The input chunk augmented by the fields given in weekday_features 
+            and hour_features.
+        '''
+        chunk = chunk.copy()
+        chunk[('weekday', '')] = chunk.index.weekday / 7
+        chunk[('time', '')] =  (chunk.index.hour * 60 + chunk.index.minute) / (24*60) - 12*60
+        chunk[('dayofyear','')] = ((chunk.index.dayofyear + 182) % 365) / 365
+        return chunk
 
 
     def _add_external_data(self, chunk, ext_dataset, external_features, horizon=None):
@@ -245,6 +306,7 @@ class Forecaster(Processing):
         if type(chunk) is pd.DatetimeIndex:
             chunk = pd.DataFrame(index = chunk)
 
+        extData = None
         if len(external_features) > 0: 
             section = TimeFrame(start=chunk.index[0], end=chunk.index[-1])
             if not horizon is None:

@@ -58,7 +58,7 @@ class AnnLstmForecasterModel(Sequence):
 
     params = {
         # Which timesteps into the future we predict
-        'models': [72], #list(range(8, 97, 8)), #[1] + list(range(2, 92, 12)),
+        'models': list(range(12, 97, 12)), #[1] + list(range(2, 92, 12)),
         
         # Amount of data used for validation
         'validation_quota': 0.1,
@@ -70,7 +70,7 @@ class AnnLstmForecasterModel(Sequence):
         'size_minibatches': 10,
         
         # Whether to use (100 for is_fast, else 2000)
-        'epochs': 100,
+        'epochs': 15,
 
         # Resolution of one step
         'resolution': '15m',
@@ -87,6 +87,9 @@ class AnnLstmForecasterModel(Sequence):
         # The features which are used as input (for the dense ANN)
         'lstm_external_features': [], #('temperature', '')],#, ('national', ''), ('school', '')],#, ('dewpoint', '')], #, 'time'
         
+        # Uses continuous features for weekdays and hours
+        'continuous_time_features': False,
+
         # How the daytime is regarded (for the dense ANN)
         'lstm_hourFeatures': [('hour', '00-06'), ('hour', "06-09"), ('hour', "09-12"), ('hour', "12-15"), ('hour', "15-18"), ('hour', "18-21"), ('hour', "21-24")],
 
@@ -300,9 +303,12 @@ class AnnLstmForecaster(Forecaster):
             The extended power series
         '''
         params = self.model.params
-        weekday_features = set(params['ann_weekdayFeatures']+params['lstm_weekdayFeatures'])
-        hourFeatures = set(params['ann_hourFeatures'] + params['lstm_hourFeatures'])
-        chunk = self._add_time_related_features(chunk, weekday_features, hourFeatures)
+        if params['continuous_time_features']:
+            chunk = self._add_continuous_time_related_features(chunk)
+        else:
+            weekday_features = set(params['ann_weekdayFeatures']+params['lstm_weekdayFeatures'])
+            hourFeatures = set(params['ann_hourFeatures'] + params['lstm_hourFeatures'])
+            chunk = self._add_time_related_features(chunk, weekday_features, hourFeatures)
         external_features = set(self.model.params['ann_external_features'] + self.model.params['lstm_external_features']) 
         if len(external_features) != 0:
             chunk = self._add_external_data(chunk, ext_dataset, external_features)
@@ -323,10 +329,14 @@ class AnnLstmForecaster(Forecaster):
         
         # Define input
         params = self.model.params
-        lstm_input_dim = 1 + len(params['lstm_external_features']) + len(params['lstm_hourFeatures']) + len(params['lstm_weekdayFeatures'])
+        if params['continuous_time_features']:
+            ann_input_dim = len(params['ann_external_features']) + 3
+            lstm_input_dim = 1 + len(params['lstm_external_features']) + 3
+        else:
+            ann_input_dim = len(params['ann_external_features']) + len(params['ann_hourFeatures']) + len(params['ann_weekdayFeatures'])
+            lstm_input_dim = 1 + len(params['lstm_external_features']) + len(params['lstm_hourFeatures']) + len(params['lstm_weekdayFeatures'])
         self.model[modelnumber]['lstm_input'] = lstm_input = C.sequence.input_variable(shape=lstm_input_dim, is_sparse = False, name="lstm_input")
 
-        ann_input_dim = len(params['ann_external_features']) + len(params['ann_hourFeatures']) + len(params['ann_weekdayFeatures'])
         self.model[modelnumber]['ann_input'] = ann_input = C.input_variable(shape=ann_input_dim, is_sparse = False, name="ann_input")
 
         # Create the network
@@ -386,9 +396,14 @@ class AnnLstmForecaster(Forecaster):
         '''
         params = self.model.params
         train_test_mask = np.random.rand(len(chunk)) < 0.8
-        ann_features = params['ann_external_features'] + params['ann_hourFeatures'] + params['ann_weekdayFeatures']
+
+        if params['continuous_time_features']:
+            ann_features = params['ann_external_features'] + [('weekday',''), ('time',''),('dayofyear','')]
+            lstm_features = params['lstm_external_features'] + [('weekday',''), ('time',''), ('dayofyear','')] + [('power','active')]
+        else:
+            ann_features = params['ann_external_features'] + params['ann_hourFeatures'] + params['ann_weekdayFeatures']
+            lstm_features = params['lstm_external_features'] + params['lstm_hourFeatures'] + params['lstm_weekdayFeatures'] + [('power','active')]
         ann_features = chunk[ann_features].values
-        lstm_features = params['lstm_external_features'] + params['lstm_hourFeatures'] + params['lstm_weekdayFeatures'] + [('power','active')]
         lstm_features = chunk[lstm_features].values
         
         if for_forecast:
