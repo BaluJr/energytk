@@ -12,6 +12,8 @@ from nilmtk import DataSet, ExternDataSet, TimeFrame, TimeFrameGroup
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from collections.abc import Sequence
 import copy
+import sys
+import threading
 
 import cntk as C
 from cntk.logging.progress_print import TensorBoardProgressWriter
@@ -24,6 +26,17 @@ except ImportError:
     from urllib import urlretrieve
 
 
+global CANCELLED
+
+def add_inputs():
+    global CANCELLED
+    while True:
+        input = sys.stdin.read(1)
+        if 'e' in input:
+            CANCELLED = True
+input_thread = threading.Thread(target=add_inputs)
+input_thread.daemon = True
+input_thread.start()
 
 class AnnLstmForecasterModel(Sequence):
     '''
@@ -57,11 +70,16 @@ class AnnLstmForecasterModel(Sequence):
     target_folder: path
         The path where the persistent model is located. Is always passed in as a parameter during
         creation of the model.
+    untrained: bool
+        Whether the model is still completely untrained. In this case the target folder has not been 
+        created yet.
+    trained_epochs: int
+        The number of the already trained epochs
     '''
 
     params = {
         # Which timesteps into the future we predict
-        'models': list(range(4, 97, 4)),
+        'models': list(range(4, 97, 50)),
         
         # Amount of data used for validation
         'validation_quota': 0.1,
@@ -72,7 +90,7 @@ class AnnLstmForecasterModel(Sequence):
         # How many errors are taken together until training step
         'size_minibatches': 10,
         
-        # Whether to use (100 for is_fast, else 2000)
+        # How many epochs to train. If set to -1, then a keyinput is awaited to cancel the progress
         'epochs': 500,
 
         # Resolution of one step
@@ -139,25 +157,27 @@ class AnnLstmForecasterModel(Sequence):
         Parameters
         ----------
         path: str
-            The path under which the model is persistently stored. If set, the additional
+            The path from where the model is loaded. If set, the additional
             parameters are ignored.
         args: dic
             Parameters which are optionally set
         '''
-        self.target_path = path
+        self.untrained = True
+        self.target_folder = None
         if not path is None:
             self.load(path)
+            self.target_path = path
         else:
             for arg in args:
                 self.params[arg] = args[arg]
             self.model = [
-                {'trainer':None,
+                {   'trainer':None,
                     'ann_input':None,
                     'lstm_input':None,
                     'label':None,
                     'model':None,
                     'plotdata': {"batchnumber":[], "loss":[], "error":[], "avg_power":[]}
-                }] * len(self.params['models'])
+                } for _ in range(len(self.params['models']))]
 
 
     def set_model(self, i, new_model):
@@ -210,18 +230,16 @@ class AnnLstmForecasterModel(Sequence):
         plt.show()
 
 
-    def store(self, folder, submodel):
+    def store(self):
         ''' Stores the model in a certain folder.
         A folder is given as certain models cannot be stored within a single file.
         
         folder: str
             Folder in which the model is persistently stored
-        submodel: int
-            The submodel which shall be stored. Used to store data in between this is necessary to cancel
-            longer training sessions in between without loosing progress.
         '''
         
         # Cancel if folder already exists and contains elements
+        folder = self.target_folder
         if os.path.isdir(folder):
             pass
             #if len(os.listdir("E:/Tensorboard/0")) != 5:
@@ -231,15 +249,28 @@ class AnnLstmForecasterModel(Sequence):
 
         # Store the cntk model and remove
         for i, cur in enumerate(self):
+            cur['trainer'].model.save(folder + str(i) + "/model.dnn")
             cur["trainer"].save_checkpoint(folder + str(i) + "/.trainer")
-        del cur['trainer']
-        del cur['ann_input']
-        del cur['lstm_input']
-        del cur['label']
-        del cur['model']
-        del cur['tensorboard_writer']
+            cur['tensorboard_writer'].flush()
+            open(folder + str(i) + "/" + str(self.params['models'][i]) ,"w+").close()
+        all_to_store = []
+        for cur in self:
+            to_store = {}
+            for cur_to_store in cur:
+                if cur_to_store in ['trainer', 'ann_input', 'lstm_input', 'label', 'model', 'tensorboard_writer']:
+                    continue
+                to_store[cur_to_store] = cur[cur_to_store]
+            all_to_store.append(to_store)
+
+        # Store meta information
+        tmp = open(folder + "model.txt" ,"w+")
+        tmp.write(str(self.params))
+        tmp.write("\n##################\n")
+        tmp.write(str(list(list(map(lambda m: m['plotdata'], self)))))
+        tmp.close()
+
         # The rest can be pickled normally 
-        pckl.dump(self, open(folder+ "basemodel", "wb"))
+        pckl.dump(all_to_store, open(folder+ "basemodel", "wb"))
     
 
     def load(folder):
@@ -293,7 +324,7 @@ class AnnLstmForecaster(Forecaster):
     # The related model
     model_class = AnnLstmForecasterModel
 
-    def __init__(self, model = None, folder = None):
+    def __init__(self, model = None):
         """
         Constructor of this class which takes an optional model as input.
         If no model is given, it creates a default one.
@@ -302,12 +333,7 @@ class AnnLstmForecaster(Forecaster):
         ---------
         model: Model of type model_class
             The model which shall be used.
-        folder: str
-            When set, the model is reconstructed from the content of the designated folder.
         """
-        if not folder is None:
-            model = AnnLstmForecasterModel.load(folder)
-
         super(AnnLstmForecaster, self).__init__(model)
         
 
@@ -380,14 +406,16 @@ class AnnLstmForecaster(Forecaster):
 
         # Define output
         self.model[modelnumber]['label'] = l = C.input_variable(1, dynamic_axes=z.dynamic_axes, name="y") 
+        self.model[modelnumber]['model'] = z
 
 
-
-    def _setup_metric_and_trainer(self, z, l, target_folder = None):
+    def _setup_metric_and_trainer(self, modelnumber, z, l, target_folder = None):
         """ Create the trainer for a model.
 
         Parameters
         ----------
+        modelnumber: int
+            Forecasting horizon this model is trained for.
         z: Cntk.model
             The model to train.
         l: str
@@ -395,18 +423,16 @@ class AnnLstmForecaster(Forecaster):
         target_folder: str
             path where the tensorboard output shall be stored.
         """
+        params = self.model.params
+
         loss = C.squared_error(z, l)
         error = self.mae(z, l)
         lr_schedule = C.learning_rate_schedule(params['learning_rate'], C.UnitType.minibatch)
         momentum_time_constant = C.momentum_as_time_constant_schedule(params['size_minibatches'] / -math.log(0.9))
         learner = C.fsadagrad(z.parameters, lr=lr_schedule, momentum=momentum_time_constant)
-        if not target_folder is None:
-            tensorboard_writer = TensorBoardProgressWriter(freq=10, log_dir=target_folder + str(modelnumber) + "/",
-                                                           model=z)
-            self.model[modelnumber]['tensorboard_writer'] = tensorboard_writer
-            self.model[modelnumber]['trainer'] = C.Trainer(z, (loss, error), [learner], tensorboard_writer)
-        else:
-            self.model[modelnumber]['trainer'] = C.Trainer(z, (loss, error), [learner])
+        tensorboard_writer = TensorBoardProgressWriter(freq=int(params['training_progress_output_freq'] / 5), log_dir=target_folder + str(modelnumber) + '/', model=z)
+        self.model[modelnumber]['tensorboard_writer'] = tensorboard_writer
+        self.model[modelnumber]['trainer'] = C.Trainer(z, (loss, error), [learner], tensorboard_writer)
         self.model[modelnumber]['model'] = z
 
 
@@ -484,14 +510,21 @@ class AnnLstmForecaster(Forecaster):
         section: nilmtk.TimeFrame
             The timeframe used for training. Meters have to be valid within this region.
         target_folder: str
-            path where the tensorboard and all other output shall be stored.
+            path where the tensorboard and all other output shall be stored. It adapts 
+            the model sothat this is the new target_path. The old model is therefore kept 
+            as it is. It the target_folder is None, the original model is adapted during
+            training.
         verbose: bool
             Whether additional output shall be printed during training.
         '''
+        global CANCELLED
+        CANCELLED = False
 
         params = self.model.params
         if not target_folder.endswith("/"):
             target_folder += "/"
+        self.model.target_folder = target_folder
+        self.model.untrained = False
 
         # A) Load the data
         chunk = self._load_data(meters, section)
@@ -502,8 +535,8 @@ class AnnLstmForecaster(Forecaster):
         # C) Create the model
         models = self.model.params['models']
         for modelnumber in range(len(models)):
-            self._model_creation(modelnumber, target_folder)
-
+            self._model_creation(modelnumber)
+            self._setup_metric_and_trainer(modelnumber, self.model[modelnumber]['model'], self.model[modelnumber]['label'], target_folder = target_folder)
         # D) Arrange the input for LSTM and ANN and labels
         ann_features, lstm_features, labels = self._arrange_features_and_labels(chunk)
 
@@ -514,39 +547,38 @@ class AnnLstmForecaster(Forecaster):
         training_indexes = np.delete(valid_indexes, testing_indexes)
         training_indexes.sort()
 
-        # Go through all horizons
-        for modelnumber, horizon in enumerate(params['models']):
+        # Repeat epochs
+        num_minibatches = len(testing_indexes) // params['size_minibatches']
+        epoch = 0
+        while not CANCELLED:
+            # Go through all horizons
+            for modelnumber, horizon in enumerate(params['models']):
+                # Do the training for all batches of epoch
+                start = time.time()
+                for i in range(num_minibatches):
+                    # Put together the features and labels
+                    items = np.random.choice(training_indexes, self.model.params['size_minibatches'])
+                    cur_lstm_input = []
+                    for item in items:
+                        cur_lstm_input.append(lstm_features[item-horizon-params['lstm_horizon']:item-horizon])
+                    cur_ann_input = ann_features[items]
+                    cur_labels = list(labels[items])
 
-            # Do the training batch per batch            
-            start = time.time()
-            num_minibatches = len(testing_indexes) // params['size_minibatches']
-            for i in range(num_minibatches * params['epochs']):
-                # Put together the features and labels
-                items = np.random.choice(training_indexes, self.model.params['size_minibatches'])
-                cur_lstm_input = []
-                for item in items:
-                    cur_lstm_input.append(lstm_features[item-horizon-params['lstm_horizon']:item-horizon])
-                cur_ann_input = ann_features[items]
-                cur_labels = list(labels[items])
+                    # iterate the minibatches
+                    model = self.model[modelnumber]
+                    model['trainer'].train_minibatch({model['label']: cur_labels, model['lstm_input']: cur_lstm_input, model['ann_input']: cur_ann_input})
+                    if i % params['training_progress_output_freq'] == 0:
+                        self._track_training_progress(modelnumber, horizon , epoch * num_minibatches + i, ann_features, lstm_features, labels, testing_indexes, verbose = verbose)
 
-                # iterate the minibatches
-                model = self.model[modelnumber]
-                model['trainer'].train_minibatch({model['label']: cur_labels, model['lstm_input']: cur_lstm_input, model['ann_input']: cur_ann_input})
-                if i % params['training_progress_output_freq'] == 0:
-                    self._track_training_progress(modelnumber, horizon , i, ann_features, lstm_features, labels, testing_indexes, verbose = verbose)
-
-            self.model[modelnumber]['trainer'].model.save(target_folder + str(modelnumber) + "/model.dnn")
-            self.model[modelnumber]['tensorboard_writer'].flush()
-            open(target_folder + str(modelnumber) + "/" + str(horizon) ,"w+").close()
-            self.model[modelnumber]['trainer'].save_checkpoint(target_folder + str(modelnumber) + "/lstm.checkpoint")
+            # After each epoch, store the progress
+            self.model.store()
             print("Training took {:.1f} sec".format(time.time() - start))
-        
-        self.model.store(target_folder)
-        tmp = open(target_folder + "model.txt" ,"w+")
-        tmp.write(str(self.model.params))
-        tmp.write("\n##################\n")
-        tmp.write(str(list(map(lambda m: m.plotdata, self.model))))
-        tmp.close()
+                        
+            epoch += 1
+            if (params['epochs'] > 0 and epoch >= params['epochs']):
+                CANCELLED == True
+
+        self.model.store()
         return self.model
 
 
