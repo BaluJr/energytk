@@ -73,9 +73,10 @@ cdef class StateTable:
         cdef int i
         for i in range(num_appliances):
             self.states[i][0].insert(0)
-        self.T1[0] = 0.
-        self.T2[0] = 0
-        self.T3[0] = "".encode('UTF-8')
+        self.T1[0], self.T1_new[0] = 0., 0.
+        self.T2[0], self.T2_new[0] = 0, 0
+        self.T3[0] = string(bytes("".encode('UTF-8')))
+        self.T3_new[0] = string(bytes("".encode('UTF-8')))
         self.num_appliances = num_appliances
         
 
@@ -204,7 +205,10 @@ cdef class StateTable:
         #print("Finished States:" + str(self.states))
         self.T1 = copy.deepcopy(self.T1_new)
         self.T2 = copy.deepcopy(self.T2_new)
-        self.T3 = copy.deepcopy(self.T3_new)
+        tmp = copy.deepcopy(self.T3_new)
+        for key in tmp:
+            tmp[key] = tmp[key].encode("UTF8")
+        self.T3 = tmp
         self.states = copy.deepcopy(self.states_new)
         #print("Finished States New:" + str(self.states_new))
         #self.T1_new = cmap[int, float]()

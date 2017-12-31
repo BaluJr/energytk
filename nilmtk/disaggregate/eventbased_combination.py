@@ -706,7 +706,7 @@ def find_appliances(params):
         if segi == 1:
             segi += 1
             continue
-        labels = myviterbi_numpy_faster(segment[['active transition', 'spike']].values, appliances)
+        labels = myviterbi_numpy_faster(segment[['active transition', 'spike']].values.astype(np.float32), appliances)
 
         # Translate labels and update transients
         reallabels = pd.DataFrame(columns=['segmentsize','subtype','appliance'], index = transients.loc[transients['segment'] == segmentid].index)
@@ -1239,8 +1239,8 @@ class EventbasedCombination(UnsupervisedDisaggregator):
                             values = np.array(power_dataframe.iloc[:,0])
                             input_params.append((indices, values, model.params['min_n_samples'],
                                                 model.params['state_threshold'], model.params['noise_level']))
-                            states_and_transients.append(find_transients_fast(input_params[-1]))
-                        #states_and_transients = pool.map(find_transients_fast, input_params)
+                            #states_and_transients.append(find_transients_fast(input_params[-1]))
+                        states_and_transients = pool.map(find_transients_fast, input_params)
                         for i in range(len(metergroup)):
                             steady_states_list[i].append(states_and_transients[i][0])
                             transients_list[i].append(states_and_transients[i][1])
@@ -1280,8 +1280,8 @@ class EventbasedCombination(UnsupervisedDisaggregator):
         for i in range(num_phases):
            input_params.append((self.model.transients[i], self.model.steady_states[i],
                                 self.model.params['state_threshold'], self.model.params['noise_level'], self.model.params['binary_spikes']))
-           self.model.transients[i] = add_segments(input_params[-1])
-        #self.model.transients = pool.map(add_segments, input_params)
+           #self.model.transients[i] = add_segments(input_params[-1])
+        self.model.transients = pool.map(add_segments, input_params)
         #nilmtk.plots.plot_segments(self.model.transients[0][:1000], self.model.steady_states[0][:1000])
         print('Segment separation: ' + str(time.time() - t1))
         
@@ -1292,8 +1292,8 @@ class EventbasedCombination(UnsupervisedDisaggregator):
         input_params = []
         for i in range(num_phases):
            input_params.append((model.transients[i], self.model.params['state_threshold']))
-           result.append(find_appliances(input_params[-1]))
-        #result = pool.map(find_appliances, input_params)
+           #result.append(find_appliances(input_params[-1]))
+        result = pool.map(find_appliances, input_params)
         for i in range(num_phases):
            model.transients[i] = result[i]['transients']
            model.clusterer[i] = result[i]['clusterer']
@@ -1308,8 +1308,8 @@ class EventbasedCombination(UnsupervisedDisaggregator):
         input_params, results = [], []
         for i in range(num_phases): #len(model.transients)):
             input_params.append((self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance'], not exact_nilm_datastore is None))
-            results.append(create_appliances(input_params[-1]))
-        #results = pool.map(create_appliances, input_params)
+            #results.append(create_appliances(input_params[-1]))
+        results = pool.map(create_appliances, input_params)
         for i in range(num_phases):
            model.appliances.append(results[i]['appliances'])
            model.overall_powerflow[i] = results[i]['overall_powerflow']
