@@ -22,6 +22,7 @@ from sklearn.covariance import EmpiricalCovariance, MinCovDet, EllipticEnvelope
 import copy
 import nilmtk.plots
 import pickle
+import matplotlib.pyplot as plt 
 
 # Fix the seed for repeatability of experiments
 SEED = 42
@@ -430,6 +431,10 @@ def separate_simultaneous_events(transients, steady_states, noise_level):
                               == common_transients["active transition"].sum(axis=1).abs()]
         if len(common_transients) < 10:
             continue
+        
+        #nilmtk.plots.latexify()
+        #pd.concat(map(lambda df: df['active transition'], transients), axis=1).fillna(0).cumsum().plot()
+        #plt.show()
 
         # Find regions where common powersource active (Only oven on multiple lines -> Pattern)
         to_cluster = (common_transients.index - pd.Timestamp("1.1.2000", tz="UTC")).total_seconds()
@@ -860,7 +865,7 @@ def create_multiphase_appliances(params):
             appliances[-1] += appliance
         overall_powerflow[phase] -= appliance
 
-    op = model.overall_powerflow[0]
+    op = overall_powerflow[0]
     overall_powerflow.append(pd.DataFrame(index = op.index, columns = op.columns, data=0))
     if exact_nilm_datastore:
         return { 'appliances':appliances, 'overall_powerflow':overall_powerflow,  "exact_nilm": exact_appliances}
@@ -1266,8 +1271,8 @@ class EventbasedCombination(UnsupervisedDisaggregator):
 
 
         ## 3. Separate segments between base load
-        if not tmp_folder is None:
-            self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'rb'))
+        #if not tmp_folder is None:
+        #    self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'rb'))
         for i in range(num_phases,len(model.steady_states)):
             model.steady_states[i] = pd.DataFrame(model.steady_states[i]).rename(columns={'active transition':'active average'})
         t1 = time.time()
@@ -1296,9 +1301,8 @@ class EventbasedCombination(UnsupervisedDisaggregator):
         if not tmp_folder is None:
            pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'wb'))
 
-
         # 5. Create the appliances (Pay attention, id per size and subtype) and rest powerflow
-        #self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'rb')); 
+        self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'rb')); 
         model.appliances_detailed = []
         t3 = time.time()
         input_params, results = [], []
@@ -1316,16 +1320,16 @@ class EventbasedCombination(UnsupervisedDisaggregator):
             result = create_multiphase_appliances((self.model.transients[i], self.model.overall_powerflow, not exact_nilm_datastore is None))
             model.appliances.append(result['appliances'])
             model.overall_powerflow = result['overall_powerflow']
-            if exact_nilm_datastore:
+            if exact_nilm_datastore:    
                model.appliances_detailed.append(result['exact_nilm'])
-
         print("Put together appliance powerflows: " + str(time.time() - t3))
         if not tmp_folder is None:
            pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'wb'))
 
+
         # 5. Store the results (Not in parallel since writing to same file)
-        if not tmp_folder is None:
-            self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'rb'))
+        #if not tmp_folder is None:
+        #    self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'rb'))
         print('Store')
         t4 = time.time()
         for phase in range(len(model.transients)):
@@ -1335,7 +1339,7 @@ class EventbasedCombination(UnsupervisedDisaggregator):
                 output_datastore.append(key, self.model.appliances[phase][i]) 
                 if not exact_nilm_datastore is None:
                     exact_nilm_datastore.append(key, self.model.appliances_detailed[phase][i])
-            output_datastore.append('{}/elec/meter{:d}'.format(building_path, 1), self.model.overall_powerflow[phase if phase < num_phases else phase-1]) # ??? Warum diese Fallunterscheidung?
+            output_datastore.append('{}/elec/meter{:d}'.format(building_path, 1), self.model.overall_powerflow[phase])
         num_meters = [len(cur) + 1 for cur in self.model.appliances] 
         stores = [(output_datastore, 300, True)] if exact_nilm_datastore is None else [(output_datastore, 300, True), (exact_nilm_datastore, 0, False)]
         for store, res, rest_included in stores:
@@ -1350,7 +1354,7 @@ class EventbasedCombination(UnsupervisedDisaggregator):
                 original_building_meta= building_meta,
                 rest_powerflow_included = rest_included
             )
-        print("Stored: " + str(time.time()-t4))
+        print("STORED: " + str(time.time()-t4) + "\n\n")
 
 
 

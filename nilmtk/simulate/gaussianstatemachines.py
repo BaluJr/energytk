@@ -202,6 +202,7 @@ class GaussianStateMachines(object):
         for chan in range(2, num_meters):
             update_elec_meters(meter_instance=chan)
             appliance = {
+                'original_name': appliancetypes[chan-2],
                 'meters': [chan],
                 'type': appliancetypes[chan-2],
                 'instance': chan - 1
