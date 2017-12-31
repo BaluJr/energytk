@@ -34,6 +34,7 @@ def add_inputs():
         input = sys.stdin.read(1)
         if 'e' in input:
             CANCELLED = True
+            print("Manually cancelled!")
 input_thread = threading.Thread(target=add_inputs)
 input_thread.daemon = True
 input_thread.start()
@@ -79,19 +80,19 @@ class AnnLstmForecasterModel(Sequence):
 
     params = {
         # Which timesteps into the future we predict
-        'models': list(range(4, 97, 50)),
+        'models': list(range(4, 97, 4)),
         
         # Amount of data used for validation
         'validation_quota': 0.1,
 
         # Learning Rate
-        'learning_rate': 0.01,
+        'learning_rate': 0.015,
 
         # How many errors are taken together until training step
         'size_minibatches': 10,
         
         # How many epochs to train. If set to -1, then a keyinput is awaited to cancel the progress
-        'epochs': 500,
+        'epochs': 50,
 
         # Resolution of one step
         'resolution': '15m',
@@ -122,10 +123,10 @@ class AnnLstmForecasterModel(Sequence):
         'lstm_weekdayFeatures': [('week', "0-5"),('week', "5-6"),('week',"6-7")],
 
         # The hidden layers of the dense ANN
-        'ann_num_hidden_layers': 2,
+        'ann_num_hidden_layers': 3,
 
         # Dimensionality of the dense ANNs hidden layers
-        'ann_hidden_layers_dim': 20,
+        'ann_hidden_layers_dim': 15,
         
         # The features which are used as input (for the dense ANN)
         'ann_external_features': [], #('temperature', '')],#, ('national', ''), ('school', '')],#, ('dewpoint', '')], #, 'time'
@@ -165,8 +166,8 @@ class AnnLstmForecasterModel(Sequence):
         self.untrained = True
         self.target_folder = None
         if not path is None:
-            self.load(path)
-            self.target_path = path
+            self.target_folder = path
+            self.load()
         else:
             for arg in args:
                 self.params[arg] = args[arg]
