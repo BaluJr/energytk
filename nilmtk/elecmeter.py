@@ -474,12 +474,14 @@ class ElecMeter(Hashable, Electric):
             print()
             print("ElecMeter.load")
             print(self)
-
-        if 'sample_period' in load_kwargs:
-            load_kwargs.setdefault('resample', True)
-
+            
         if self.sample_period() == 0:
             load_kwargs["high_res"] = True
+            if not 'sample_period' in load_kwargs:
+                load_kwargs.setdefault('sample_period', 1)
+                
+        if 'sample_period' in load_kwargs:
+            load_kwargs.setdefault('resample', True)
 
         if load_kwargs.get('resample'):
             # Set default key word arguments for resampling.

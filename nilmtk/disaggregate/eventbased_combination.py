@@ -2,7 +2,7 @@ from __future__ import print_function, division
 from collections import OrderedDict, deque
 import time
 from datetime import datetime
-from nilmtk.disaggregate.accelerators import find_steady_states_fast, find_transients_baranskistyle_fast, find_transients_fast, pair_fast, find_sections, myresample_fast, myviterbi_numpy_fast
+from nilmtk.disaggregate.accelerators import find_steady_states_fast, find_transients_baranskistyle_fast, find_transients_fast, pair_fast, find_sections, myresample_fast, myviterbi_numpy_fast, myviterbi_numpy_faster
 from nilmtk import TimeFrame, TimeFrameGroup
 from nilmtk.disaggregate import UnsupervisedDisaggregator, UnsupervisedDisaggregatorModel
 import numpy as np
@@ -22,6 +22,7 @@ from sklearn.covariance import EmpiricalCovariance, MinCovDet, EllipticEnvelope
 import copy
 import nilmtk.plots
 import pickle
+import matplotlib.pyplot as plt 
 
 # Fix the seed for repeatability of experiments
 SEED = 42
@@ -53,11 +54,10 @@ class EventbasedCombinationDisaggregatorModel(UnsupervisedDisaggregatorModel):
         'min_n_samples':2,
         
         # cols: nilmtk.Measurement, should be one of the following
-        #  [('power','active')]
-        #  [('power','apparent')]
-        #  [('power','reactive')]
-        #  [('power','active'), ('power', 'reactive')]
-        'cols': [('power','active')],
+        
+
+
+        'cols': [('power','active')], #('power','apparent'), ('power', 'reactive')
 
         # If transition is greater than large_transition,
         # then use percent of large_transition
@@ -94,7 +94,10 @@ class EventbasedCombinationDisaggregatorModel(UnsupervisedDisaggregatorModel):
         'sample_period':120,
 
         # The frequency of the low res data
-        "downsampled_resolution": "5min"
+        "downsampled_resolution": "5min",
+
+        # Whether spikes are handled in a binary way: Spike or no Spike
+        "binary_spikes": False
     }
     
 
@@ -127,6 +130,8 @@ def add_segments(params):
         The threshold earlier used for extracting the segments.
     noise_level: float
         The noiselevel earlier used for extracting the segments.
+    binary_spikes: bool
+        Whether spikes are handled binary
     
     Returns
     -------
@@ -142,7 +147,7 @@ def add_segments(params):
                     the transients of an downevent.
     '''
 
-    transients, states, threshold, noise_level = params
+    transients, states, threshold, noise_level, binary_spikes = params
     
     # Add segment information
     values = np.array(states.iloc[:,0])
@@ -158,10 +163,15 @@ def add_segments(params):
     # Additional features, which come in handy
     transients.loc[transients['active transition'] >= 0, 'spike'] = transients[transients['active transition'] >= 0]['signature'].apply(lambda sig: np.cumsum(sig).max())
     transients.loc[transients['active transition'] >= 0, 'spike'] -= transients.loc[transients['active transition'] >= 0, 'active transition']
-    #transients.loc[transients['active transition'] >= 0, 'spike'] = transients.loc[transients['active transition'] >= 0, 'spike'].clip(lower=0)
     transients.loc[transients['active transition'] < 0, 'spike'] =  transients[transients['active transition'] < 0]['signature'].apply(lambda sig: np.cumsum(sig).min())
     transients.loc[transients['active transition'] < 0, 'spike'] -= transients.loc[transients['active transition'] < 0, 'active transition']
-    #transients.loc[transients['active transition'] < 0, 'spike'] = transients.loc[transients['active transition'] < 0, 'spike'].clip(upper=0)
+    
+    if binary_spikes:
+        transients.loc[transients['active transition'] >= 0, 'spike'] = (transients.loc[transients['active transition'] >= 0, 'spike'] > 0.5).astype(int)
+        transients.loc[transients['active transition'] < 0, 'spike'] = (transients.loc[transients['active transition'] < 0, 'spike'] < 0.5).astype(int)
+    #else:
+    #    transients.loc[transients['active transition'] >= 0, 'spike'] = transients.loc[transients['active transition'] >= 0, 'spike'].clip(lower=0)
+    #    transients.loc[transients['active transition'] < 0, 'spike'] = transients.loc[transients['active transition'] < 0, 'spike'].clip(upper=0)
 
     return transients
 
@@ -200,13 +210,13 @@ def fast_groupby(df):
     # Twoevents
     if (index[1] - index[0]) == 2:
         for arr in np.vsplit(values,index[1:]):
-            result.append(np.array([np.sum(np.abs(arr[:,0]))/2, arr[0,0] + arr[1,0], np.clip(arr[0,1] - arr[0,0],0, None), np.clip(arr[1,1]-arr[1,0], None, 0), arr[1,2]])) # arr[:,2]]))#, arr[1:,3]]))
+            result.append(np.array([np.sum(np.abs(arr[:,0]))/2, arr[0,0] + arr[1,0], arr[0,1], arr[1,1], arr[1,2]]))
         cols = ['transition_avg', 'transition_delta', 'spike_up', 'spike_down', 'duration']
     # Threeevents
     elif (index[1] - index[0]) == 3:
         for arr in np.vsplit(values,index[1:]):
-            result.append(np.concatenate([arr[:,0]]))#, arr[:,1], arr[:,2]]))#, arr[1:,3]]))
-        cols = ['fst', 'sec', 'trd']#, 'fst_spike', 'sec_spike', 'trd_spike', ]  #, 'fst_length', 'sec_length', 'trd_length']#, 'fst_duration', 'sec_duration']
+            result.append(np.concatenate([arr[:,0], arr[:,1]]))#, arr[:,2]]))#, arr[1:,3]]))
+        cols = ['fst', 'sec', 'trd', 'fst_spike', 'sec_spike', 'trd_spike', ]  #, 'fst_length', 'sec_length', 'trd_length']#, 'fst_duration', 'sec_duration']
     # Fourevents
     else:
         for arr in np.vsplit(values,index[1:]):
@@ -245,7 +255,7 @@ def fast_groupby_with_additional_grpfield(df):
     
     # This version only supports twoevents    
     for arr in np.vsplit(values,index[1:]):
-        result.append(np.array([np.sum(np.abs(arr[:,0]))/2, arr[0,0] + arr[1,0], arr[0,1] - arr[0,0], arr[1,1]-arr[1,0], arr[1,2]])) # arr[:,2]]))#, arr[1:,3]]))
+        result.append(np.array([np.sum(np.abs(arr[:,0]))/2, arr[0,0] + arr[1,0], arr[0,1], arr[1,1], arr[1,2]])) # arr[:,2]]))#, arr[1:,3]]))
     cols = ['transition_avg', 'transition_delta', 'spike_up', 'spike_down', 'duration']
     idx = pd.MultiIndex.from_arrays([df.loc[::2,'segment'],df.loc[::2,'grp'].values])
     df2 = pd.DataFrame(index = idx, data = result, columns=cols)
@@ -379,6 +389,10 @@ def separate_simultaneous_events(transients, steady_states, noise_level):
         The steady_states where the multiphase appearances are removed from.
     steady_states: [pd.DataFrame, pd.DataFrame, pd.DataFrame]
         The steady_states where the multiphase appearances are removed from.
+    overall_powerflows: [pd.DataFrame, pd.DataFrame, pd.DataFrame]
+        Has already the 5min resolution.
+        The rest powerflows. The events which are separated into the separate 
+        load profiles have to be subtracted from the overall_powerflows.
     noise_level: float
         The noiselevel earlier used for extracting the segments.
     
@@ -392,7 +406,7 @@ def separate_simultaneous_events(transients, steady_states, noise_level):
         DataFrames and added to separate new DataFrames.
     '''
 
-    plotting = True
+    plotting = False
     if plotting:
         original_transients = copy.deepcopy(transients)
         interesting_sections = []
@@ -417,6 +431,10 @@ def separate_simultaneous_events(transients, steady_states, noise_level):
                               == common_transients["active transition"].sum(axis=1).abs()]
         if len(common_transients) < 10:
             continue
+        
+        #nilmtk.plots.latexify()
+        #pd.concat(map(lambda df: df['active transition'], transients), axis=1).fillna(0).cumsum().plot()
+        #plt.show()
 
         # Find regions where common powersource active (Only oven on multiple lines -> Pattern)
         to_cluster = (common_transients.index - pd.Timestamp("1.1.2000", tz="UTC")).total_seconds()
@@ -447,6 +465,7 @@ def separate_simultaneous_events(transients, steady_states, noise_level):
                 sum = cur.sum()['active transition']
                 cur.loc[cur.index[-1], 'active transition'] -= sum
                 confident_common_transients[i] = confident_common_transients[i].append(cur) #.add_suffix(str(i))
+                confident_common_transients[i]['from' + str(i)] = confident_common_transients[i]['active transition']
 
                 # Adapt the original powerflow sothat removal invisible in real powerflow
                 steady_states[i].drop(cur.index, inplace = True)
@@ -466,9 +485,15 @@ def separate_simultaneous_events(transients, steady_states, noise_level):
         up = common_transients['active transition'] > 0
         common_transients.loc[up,'signature'] = signatures.loc[up,'signature'].fillna(0).applymap(lambda sig: np.max(np.cumsum(sig))).sum(axis=1)
         common_transients.loc[~up,'signature'] = signatures.loc[~up,'signature'].fillna(0).applymap(lambda sig: np.min(np.cumsum(sig))).sum(axis=1)
+        
+        # Set the multiphase events immediately as secure events
+        common_transients['appliance'] = 0
+        common_transients['confident'] = True
+        common_transients['subtype'] = 0
+        
         # End is set to nonsense here as it is not used later on either way
         common_transients['ends'] = common_transients.index + pd.Timedelta('4s')
-  
+
         # Create and add the new transients 
         new_transients.append(common_transients)
         new_states = pd.DataFrame(common_transients['active transition'].cumsum())
@@ -484,7 +509,36 @@ def separate_simultaneous_events(transients, steady_states, noise_level):
 
     return transients, steady_states
 
+def my_resample_highdef(power, start, end, resolution = '5min', columns = ["active transiton"]):
+    '''
+    This function is used to resample high def samples to a reasonable 
+    resolution by a weighted mean.
+    Paramters
+    ---------
+    power: pd.Series
+        The power of the appliance as transients with the flags.
+    start: pd.TimeStampe
+        Beginning of the region to downsample.
+    end: pd.TimeStampe
+        End of the region to downsample.
+    resolution: string
+        The resolution to downsample to.
+    columns: string
+        Name of columns of the resulting DataFrame
 
+    Returns
+    -------
+    appliance:
+        Power of the appliance downsampled to the given resolutions
+    '''
+    appliance = power.cumsum()
+    new_idx = pd.DatetimeIndex(start = start, end = end, freq = resolution).tz_convert('utc')
+    newSeries = pd.Series(index = new_idx)
+    resampledload = appliance.append(newSeries).sort_index()
+    resampledload = resampledload.ffill().bfill()
+    appliance = pd.DataFrame(resampledload.resample(resolution, how=myresample_fast), columns=columns)
+    appliance = appliance.fillna(0)
+    return appliance
 
 def find_appliances(params):
     ''' Assign labels to the transients, defining the appliances they belong to.
@@ -617,7 +671,7 @@ def find_appliances(params):
             & transients['confident']].groupby(['segmentsize', 'subtype', 'appliance']):
         cur_appliance = {'length':int(length), 'appliance':appliance, 'subtype': subtype}
         if len(rows) // length < 5 or length == 4:
-            transients[(transients['segmentsize'] == length) & (transients['subtype'] == subtype) & (transients['appliance'] == appliance), 'confident'] = False
+            transients.loc[(transients['segmentsize'] == length) & (transients['subtype'] == subtype) & (transients['appliance'] == appliance), 'confident'] = False
         infostr = "__"
         for place, concrete_events in rows.groupby('segplace'):
             cur_appliance[place] = EllipticEnvelope().fit(concrete_events[['active transition','spike']])
@@ -627,13 +681,32 @@ def find_appliances(params):
     print("##################### " + str(len(appliances)))
 
     # Now find the appliances within the longer segments
+    #all_segments = str(len(transients[transients['segmentsize'] > 4]['segment'].unique()))
+    #segi = 1
+    #t0 = time.time()
+    #for segmentid, segment in transients[transients['segmentsize'] > 4].groupby('segment'):
+    #    labels = myviterbi_numpy_fast(segment[['active transition', 'spike']].values, appliances)
+
+    #    # Translate labels and update transients
+    #    reallabels = pd.DataFrame(columns=['segmentsize','subtype','appliance'], index = transients.loc[transients['segment'] == segmentid].index)
+    #    for i, lbl in enumerate(labels):
+    #        a = appliances[lbl]
+    #        reallabels.iloc[i,:] = [a['length'], a['subtype'], a['appliance']]
+    #    transients.loc[transients['segment'] == segmentid, ['segmentsize','subtype','appliance']] = reallabels
+    #    print("Original: " + str(segi) + "/" + all_segments + ": " + str(time.time()-t0) + "|| Avg: " + str((time.time()-t0)/segi))
+    #    segi += 1
+    #    if segi == 20:
+    #        break
+    
+    print("##########")
     all_segments = str(len(transients[transients['segmentsize'] > 4]['segment'].unique()))
-    segi = 0
+    segi = 1
     t0 = time.time()
     for segmentid, segment in transients[transients['segmentsize'] > 4].groupby('segment'):
-        print(str(segi) + "/" + all_segments + ": " + str(time.time()-t0))
-        segi += 1
-        labels = myviterbi_numpy_fast(segment[['active transition', 'spike']].values, appliances)
+        if segi == 1:
+            segi += 1
+            continue
+        labels = myviterbi_numpy_faster(segment[['active transition', 'spike']].values, appliances)
 
         # Translate labels and update transients
         reallabels = pd.DataFrame(columns=['segmentsize','subtype','appliance'], index = transients.loc[transients['segment'] == segmentid].index)
@@ -641,6 +714,9 @@ def find_appliances(params):
             a = appliances[lbl]
             reallabels.iloc[i,:] = [a['length'], a['subtype'], a['appliance']]
         transients.loc[transients['segment'] == segmentid, ['segmentsize','subtype','appliance']] = reallabels
+        if segi % 10 == 0:
+            print("Faster: " + str(segi) + "/" + all_segments + ": " + str(time.time()-t0) + "|| Avg: " + str((time.time()-t0)/segi))
+        segi += 1
 
     transients['segmentsize'] = transients['segmentsize'].astype(int)
     return {'transients':transients, 'clusterer':clusterers}
@@ -656,6 +732,8 @@ def create_appliances(params):
         The transients among which appliances are searched.
     overall_powerflow: pd.DataFrame
         The overall_powerflow with 5min resolution, which was generated during creation.
+    min_appearance: int
+        How many events an appliance must have to be persisted.
     exact_nilm_datastore: bool 
         When set to true, also return the full resolution result.
     
@@ -698,26 +776,24 @@ def create_appliances(params):
             power_detailed = pd.DataFrame(power_detailed)
             power_detailed.columns = overall_powerflow.columns
             power_detailed = power_detailed.sort_index().cumsum()
-            power_detailed.loc[power_detailed.index[-1] + pd.Timedelta('0.5sec'),:] = [0]
-            exact_appliances.append(pd.DataFrame(power_detailed.astype(np.float32)))
+            #power_detailed.loc[power_detailed.index[-1] + pd.Timedelta('0.5sec'),:] = [0]
+            power_detailed = pd.DataFrame(power_detailed.astype(np.float32))
+            power_detailed.columns = pd.MultiIndex.from_tuples([('power', 'active')], names=['physical_quantity', 'type'])
+            exact_appliances.append(power_detailed)
             
         # Default output: Resample the appliances to 5min (weighted mean)
-        appliance = power.cumsum()
-        def myresample(d):
-            if len(d) == 1:
-                return d[0]
-            weights = np.append(np.diff(d.index),np.timedelta64(5,'m') - (d.index[-1] - d.index[0]))
-            weights = weights.astype('timedelta64[ms]').astype(int)
-            return np.average(d, weights=weights)
-        new_idx = pd.DatetimeIndex(start = overall_powerflow.index[0], end = overall_powerflow.index[-1], freq = '5min').tz_convert('utc')
-        newSeries = pd.Series(index = new_idx)
-        resampledload = appliance.append(newSeries).sort_index()
-        resampledload = resampledload.ffill().bfill()
-        appliance = pd.DataFrame(resampledload.resample('5min', how=myresample_fast), columns=overall_powerflow.columns)
-        appliance = appliance.fillna(0)
+        appliance = my_resample_highdef(power, overall_powerflow.index[0],  overall_powerflow.index[-1], resolution = '5min', columns=pd.MultiIndex.from_tuples([('power', 'active')], names=['physical_quantity', 'type']))
+        #appliance = power.cumsum()
+        #new_idx = pd.DatetimeIndex(start = overall_powerflow.index[0], end = overall_powerflow.index[-1], freq = '5min').tz_convert('utc')
+        #newSeries = pd.Series(index = new_idx)
+        #resampledload = appliance.append(newSeries).sort_index()
+        #resampledload = resampledload.ffill().bfill()
+        #appliance = pd.DataFrame(resampledload.resample('5min', how=myresample_fast), columns=overall_powerflow.columns)
+        #appliance = appliance.fillna(0)
 
         # Prepare output and subtract from overallpowerflow
         appliances.append(appliance)
+        overall_powerflow.columns = pd.MultiIndex.from_tuples([('power', 'active')], names=['physical_quantity', 'type'])
         overall_powerflow  = pd.eval('overall_powerflow - appliance')
 
     if exact_nilm_datastore:
@@ -726,6 +802,75 @@ def create_appliances(params):
         return { 'appliances':appliances, 'overall_powerflow':overall_powerflow }
 
 
+
+
+def create_multiphase_appliances(params):
+    ''' Creates the appliances from the multiphases phases. 
+    At the moment all contained transients are expected to belong for 
+    sure to a single component.
+    The overall_powerflows, which contain the rest for the original 
+    phases are reduced by the amount ending up in the multiphase events.
+
+    Paramters
+    ---------
+    transients: pd.DataFrame
+        The transients among which appliances are searched.
+    overall_powerflows: pd.DataFrame
+        The overall_powerflows with 5min resolution. They are reduced by the amount 
+        contained inside the multiphase events.
+    exact_nilm_datastore: bool 
+        When set to true, also return the full resolution result.
+    
+    Returns
+    -------
+    appliances: pd.DataFrame
+        Powerflow of the succesfully disaggregated appliances.
+        Currently a resolution of 5 minutes.
+    overall_powerflow: pd.DataFrame
+        The rest powerflow which remains after summing up all successfully disaggregated appliances.
+        Currently a resolution of 5 minutes.
+    exact_nilm: Optional
+        If 'exact_nilm_datastore' is set to true, then this field contains a dataframe which stores 
+        the flags at there exact point in time.
+    '''
+
+    transients, overall_powerflow, exact_nilm_datastore = params
+    appliances = []
+    if exact_nilm_datastore:
+        exact_appliances = []
+
+    # If demanded also return a full resolution output by using the flags
+    power = transients['active transition']
+    if exact_nilm_datastore:
+        power_detailed = power.append(pd.Series(0, name='power active', index=transients.index - pd.Timedelta('0.5sec')))
+        power_detailed = pd.DataFrame(power_detailed)
+        power_detailed.columns = overall_powerflow[0].columns
+        power_detailed = power_detailed.sort_index().cumsum()
+        power_detailed.loc[power_detailed.index[-1] + pd.Timedelta('0.5sec'),:] = [0]
+        exact_appliances.append(pd.DataFrame(power_detailed.astype(np.float32)))
+            
+    # Default output: Resample the appliances to 5min (weighted mean)
+    # Find the two transitions and remove from the overall_powerflows they belong to
+    columns = transients.columns
+    appliances = []
+    for col in columns:
+        if not col.startswith('from'):
+            continue
+        phase = int(col[-1])
+        cur = transients[col]
+        appliance = my_resample_highdef(cur, overall_powerflow[0].index[0],  overall_powerflow[0].index[-1], resolution = '5min', columns=overall_powerflow[0].columns)
+        if len(appliances) == 0:
+            appliances.append(appliance)
+        else:
+            appliances[-1] += appliance
+        overall_powerflow[phase] -= appliance
+
+    op = overall_powerflow[0]
+    overall_powerflow.append(pd.DataFrame(index = op.index, columns = op.columns, data=0))
+    if exact_nilm_datastore:
+        return { 'appliances':appliances, 'overall_powerflow':overall_powerflow,  "exact_nilm": exact_appliances}
+    else:
+        return { 'appliances':appliances, 'overall_powerflow':overall_powerflow }
 
 
 def _gmm_clustering(events, max_num_clusters=5, exact_cluster=None, dim_scaling = {}, dim_emph = {}):
@@ -1028,7 +1173,9 @@ class EventbasedCombination(UnsupervisedDisaggregator):
         Parameters
         ----------
         metergroup: nilmtk.MeterGroup
-            The metergroup of the buildings main meters
+            The metergroup of the buildings main meters.
+            Can also be a list of [transients, steady_states] In that case, the given data is 
+            immediately used and the loading step is skipped.
         output_datastore: nilmtk.Datastore
             Storage where the disaggregated meters are stored
         exact_nilm_datastore: nilmtk.Datastore
@@ -1037,81 +1184,102 @@ class EventbasedCombination(UnsupervisedDisaggregator):
             Path to a folder where intermediate results shall be stored.
             It let none, no intermediate results are stored
         """
-
         ### Prepare
-        kwargs = self._pre_disaggregation_checks(metergroup, kwargs)
-        kwargs.setdefault('sections', metergroup.good_sections().merge_shorter_gaps_than('10min'))
         pool = Pool(processes=3)
-        metergroup = metergroup.sitemeters()
         model = self.model
         model.steady_states = []
         model.transients = []
         model.appliances = []
         model.appliances_detailed = []
-        model.clusterer = [{}] * len(metergroup)
+        model.clusterer = [{} for _ in range(len(metergroup))]
         model.overall_powerflow = overall_powerflow = []
+        
 
-        ## 1. Load the events from the powerflow data
-        print('Extract events')
+        # 1. Load the events from the powerflow data
+        if type(metergroup) is list:
+            model.transients = [metergroup[0]]
+            model.steady_states = [metergroup[1]]
+            model.overall_powerflow = [my_resample_highdef(model.transients[0]['active transition'], model.steady_states[0].index[0], model.steady_states[0].index[-1], '5min', ['active transition'])]
+            num_phases = 1
+            building_number = 1
+            building_meta = {}
+        else:
+            kwargs = self._pre_disaggregation_checks(metergroup, kwargs)
+            kwargs.setdefault('sections', metergroup.good_sections().merge_shorter_gaps_than('10min'))
+            metergroup = metergroup.sitemeters()
+            num_phases = len(metergroup)
+            building_number = metergroup.building()
+            building_meta = metergroup.meters[0].building_metadata
+
+            print('Extract events')
+            t1 = time.time()
+            loader, steady_states_list, transients_list = [], [], []
+            try:
+              self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '.pckl', 'rb'))
+              model.appliances = []
+            except:
+                print("Load new")
+                for i in range(num_phases):
+                    overall_powerflow.append(None)
+                    steady_states_list.append([])
+                    transients_list.append([])
+                    loader.append(metergroup.meters[i].load(cols=self.model.params['cols'], chunksize = 31000000, **kwargs))
+                try:
+                    while(True):
+                        input_params = []
+                        states_and_transients = []
+                        for i in range(num_phases):
+                            power_dataframe = next(loader[i]).dropna()
+                            if overall_powerflow[i] is None:
+                                overall_powerflow[i] = power_dataframe.resample('5min').agg('mean')
+                            else:
+                                overall_powerflow[i] = \
+                                    overall_powerflow[i].append(power_dataframe.resample('5min', how='mean'))
+                            indices = np.array(power_dataframe.index)
+                            values = np.array(power_dataframe.iloc[:,0])
+                            input_params.append((indices, values, model.params['min_n_samples'],
+                                                model.params['state_threshold'], model.params['noise_level']))
+                            states_and_transients.append(find_transients_fast(input_params[-1]))
+                        #states_and_transients = pool.map(find_transients_fast, input_params)
+                        for i in range(len(metergroup)):
+                            steady_states_list[i].append(states_and_transients[i][0])
+                            transients_list[i].append(states_and_transients[i][1])
+                except StopIteration:
+                    pass
+                # set model (timezone is lost within c programming)
+                for i in range(num_phases):
+                    model.steady_states.append(pd.concat(steady_states_list[i]).tz_localize('utc'))
+                    model.transients.append(pd.concat(transients_list[i]).tz_localize('utc'))
+                    model.transients[-1].index.rename("starts", inplace = True)
+                if not tmp_folder is None:
+                    pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '.pckl', 'wb'))
+            print("Eventloading: " + str(time.time()-t1))
+
+        #for i in range(len(model.transients)):
+        #    model.transients[i] = model.transients[i]
+        #    model.steady_states[i] = model.steady_states[i]
+        #    model.overall_powerflow[i] = model.overall_powerflow[i]
+
+        # 2. Create separate powerflows with events, shared by multiple phases
         t1 = time.time()
-        loader, steady_states_list, transients_list = [], [], []
-        try:
-          self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '.pckl', 'rb'))
-          model.appliances = []
-        except:
-          for i in range(len(metergroup)):
-              overall_powerflow.append(None)
-              steady_states_list.append([])
-              transients_list.append([])
-              loader.append(metergroup.meters[i].load(cols=self.model.params['cols'], chunksize = 31000000, **kwargs))
-          try:
-              while(True):
-                  input_params = []
-                  for i in range(len(metergroup)):
-                      power_dataframe = next(loader[i]).dropna()
-                      if overall_powerflow[i] is None:
-                          overall_powerflow[i] = power_dataframe.resample('5min').agg('mean')
-                      else:
-                          overall_powerflow[i] = \
-                              overall_powerflow[i].append(power_dataframe.resample('5min', how='mean'))
-                      indices = np.array(power_dataframe.index)
-                      values = np.array(power_dataframe.iloc[:,0])
-                      input_params.append((indices, values, model.params['min_n_samples'],
-                                           model.params['state_threshold'], model.params['noise_level']))
-                  states_and_transients = pool.map(find_transients_fast, input_params)
-                  for i in range(len(metergroup)):
-                      steady_states_list[i].append(states_and_transients[i][0])
-                      transients_list[i].append(states_and_transients[i][1])
-          except StopIteration:
-              pass
-          # set model (timezone is lost within c programming)
-          for i in range(len(metergroup)):
-              model.steady_states.append(pd.concat(steady_states_list[i]).tz_localize('utc'))
-              model.transients.append(pd.concat(transients_list[i]).tz_localize('utc'))
-              model.transients[-1].index.rename("starts", inplace = True)
-          if not tmp_folder is None:
-              pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '.pckl', 'wb'))
-        print("Eventloading: " + str(time.time()-t1))
-
-
-        ## 2. Create separate powerflows with events, shared by multiple phases
-        # t1 = time.time()
-        # model.transients, model.steady_states = \
-        #    separate_simultaneous_events(model.transients, model.steady_states, model.params['noise_level'])
-        # if not tmp_folder is None:
-        #    pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'wb'))
-        # print('Shared phase separation: ' + str(time.time() - t1))
+        if len(model.transients) > 1:
+            model.transients, model.steady_states = \
+                separate_simultaneous_events(model.transients, model.steady_states, model.params['noise_level'])
+        if not tmp_folder is None:
+            pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'wb'))
+        print('Shared phase separation: ' + str(time.time() - t1))
 
 
         ## 3. Separate segments between base load
-        self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'rb'))
-        for i in range(3,len(model.steady_states)):
+        #if not tmp_folder is None:
+        #    self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'rb'))
+        for i in range(num_phases,len(model.steady_states)):
             model.steady_states[i] = pd.DataFrame(model.steady_states[i]).rename(columns={'active transition':'active average'})
         t1 = time.time()
         input_params = []
-        for i in range(3):#len(model.transients)):
+        for i in range(num_phases):
            input_params.append((self.model.transients[i], self.model.steady_states[i],
-                                self.model.params['state_threshold'], self.model.params['noise_level']))
+                                self.model.params['state_threshold'], self.model.params['noise_level'], self.model.params['binary_spikes']))
            self.model.transients[i] = add_segments(input_params[-1])
         #self.model.transients = pool.map(add_segments, input_params)
         #nilmtk.plots.plot_segments(self.model.transients[0][:1000], self.model.steady_states[0][:1000])
@@ -1122,62 +1290,71 @@ class EventbasedCombination(UnsupervisedDisaggregator):
         t2 = time.time()
         result = []
         input_params = []
-        for i in range(3):#len(model.transients)):
+        for i in range(num_phases):
            input_params.append((model.transients[i], self.model.params['state_threshold']))
            result.append(find_appliances(input_params[-1]))
         #result = pool.map(find_appliances, input_params)
-        for i in range(3):#len(model.transients)):
+        for i in range(num_phases):
            model.transients[i] = result[i]['transients']
            model.clusterer[i] = result[i]['clusterer']
         print("Find appliances: " + str(time.time() - t2))
         if not tmp_folder is None:
            pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'wb'))
 
-
         # 5. Create the appliances (Pay attention, id per size and subtype) and rest powerflow
-        #self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'rb')); model.appliances_detailed = []
+        self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'rb')); 
+        model.appliances_detailed = []
         t3 = time.time()
         input_params, results = [], []
-        for i in range(3):#len(model.transients)):
-           input_params.append((self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance'], exact_nilm_datastore))
-           #results.append(create_appliances(input_params[-1]))
-        results = pool.map(create_appliances, input_params)
-        for i in range(3):#len(model.transients)):
+        for i in range(num_phases): #len(model.transients)):
+            input_params.append((self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance'], not exact_nilm_datastore is None))
+            results.append(create_appliances(input_params[-1]))
+        #results = pool.map(create_appliances, input_params)
+        for i in range(num_phases):
            model.appliances.append(results[i]['appliances'])
            model.overall_powerflow[i] = results[i]['overall_powerflow']
            if exact_nilm_datastore:
                model.appliances_detailed.append(results[i]['exact_nilm'])
+        # Then create the multiphase events (has to be done, one after another)
+        for i in range(num_phases, len(model.transients)):
+            result = create_multiphase_appliances((self.model.transients[i], self.model.overall_powerflow, not exact_nilm_datastore is None))
+            model.appliances.append(result['appliances'])
+            model.overall_powerflow = result['overall_powerflow']
+            if exact_nilm_datastore:    
+               model.appliances_detailed.append(result['exact_nilm'])
         print("Put together appliance powerflows: " + str(time.time() - t3))
         if not tmp_folder is None:
            pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'wb'))
 
+
         # 5. Store the results (Not in parallel since writing to same file)
-        self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'rb'))
+        #if not tmp_folder is None:
+        #    self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'rb'))
         print('Store')
         t4 = time.time()
         for phase in range(len(model.transients)):
-            building_path = '/building{}'.format(metergroup.building() * 10 + phase)
+            building_path = '/building{}'.format(building_number * 10 + phase)
             for i in range(len(self.model.appliances[phase])):
                 key = '{}/elec/meter{:d}'.format(building_path, i + 2) # 0 not existing and Meter1 is rest
                 output_datastore.append(key, self.model.appliances[phase][i]) 
                 if not exact_nilm_datastore is None:
                     exact_nilm_datastore.append(key, self.model.appliances_detailed[phase][i])
-            output_datastore.append('{}/elec/meter{:d}'.format(building_path, 1), self.model.overall_powerflow[phase if phase < 3 else phase-1])
+            output_datastore.append('{}/elec/meter{:d}'.format(building_path, 1), self.model.overall_powerflow[phase])
         num_meters = [len(cur) + 1 for cur in self.model.appliances] 
-        stores = [(output_datastore, 300, True)] if exact_nilm_datastore is None else [(output_datastore, 300, True), (exact_nilm_datastore, 1, False)]
+        stores = [(output_datastore, 300, True)] if exact_nilm_datastore is None else [(output_datastore, 300, True), (exact_nilm_datastore, 0, False)]
         for store, res, rest_included in stores:
             self._save_metadata_for_disaggregation(
                 output_datastore = store,
-                sample_period = res, #kwargs['sample_period'] if 'sample_period' in kwargs else 2,  Set to 5 minutes
+                sample_period = res, 
                 measurement=self.model.overall_powerflow[0].columns,
-                timeframes=list(kwargs['sections']),
-                building=metergroup.building(),
+                timeframes=list(kwargs['sections']) if 'sections' in kwargs else TimeFrameGroup([TimeFrame(start=model.transients[0].index[0],end=model.transients[0].index[-1])]),
+                building=building_number,
                 supervised=False,
                 num_meters=num_meters,
-                original_building_meta=metergroup.meters[0].building_metadata,
+                original_building_meta= building_meta,
                 rest_powerflow_included = rest_included
             )
-        print("Stored: " + str(time.time()-t4))
+        print("STORED: " + str(time.time()-t4) + "\n\n")
 
 
 
@@ -1270,7 +1447,7 @@ class EventbasedCombination(UnsupervisedDisaggregator):
 
 
         # Building metadata always stored for the new buildings
-        for i in range(3):
+        for i in range(len(num_meters)):
             phase_building = building * 10 + i 
             building_path = '/building{}'.format(phase_building)
             mains_data_location = building_path + '/elec/meter1'
@@ -1341,11 +1518,14 @@ class EventbasedCombination(UnsupervisedDisaggregator):
                     }
                     appliances.append(appliance)
 
+            if len(appliances) == 0:
+                continue 
+
             building_metadata = {
                 'instance': (phase_building),
                 'elec_meters': elec_meters,
                 'appliances': appliances,
-                'original_name': original_building_meta['original_name'],
+                'original_name': original_building_meta['original_name'] if 'original_name' in original_building_meta else None,
                 'geo_location': original_building_meta['geo_location'] if 'geo_location' in original_building_meta else None,
                 'zip': original_building_meta['zip'] if 'zip' in original_building_meta else None,
             }
@@ -1357,7 +1537,8 @@ class EventbasedCombination(UnsupervisedDisaggregator):
     def disaggregate_single_phase(self, transients, steady_states):
         '''
         This function does the disaggregation of a single phase. 
-        It has been mainly created as a test function.
+        It has been mainly created as a test function for testing the 
+        synthetic data.
 
         Parameters
         ----------
@@ -1375,29 +1556,25 @@ class EventbasedCombination(UnsupervisedDisaggregator):
         rest: pd.DataFrame
             The remaining powerflow which could not be assigned to the appliances.
         '''
-        #[segment, appliances] = pckl.load(open('tst_myviterbi.pckl', 'rb'))
-        #labels = myviterbi_numpy(segment, appliances)
-        #labels = myviterbi(segment[['active transition', 'spike']].values, segment['segplace'].values, appliances)
-        #appliances.loc[appliances['section'] == segmentid, "appliance"] = labels
-        #kaputt()
-
         # Separate segments
         t1 = time.time()
-        transients = add_segments([transients, steady_states, self.model.params['state_threshold'], self.model.params['noise_level']])
+        transients = add_segments([transients, steady_states, self.model.params['state_threshold'], self.model.params['noise_level'], self.model.params['binary_spikes']])
         print('Segment separation: ' + str(time.time() - t1))
 
         # Create all events which per definition have to belong together
         t2 = time.time()
-        transient, clusterer = find_appliances([transients, self.model.params['state_threshold']])
+        tmp = find_appliances([transients, self.model.params['state_threshold']])
+        transients = tmp['transients']
+        clusterer = tmp['clusterer']
         print("Find appliances: " + str(time.time() - t2))
 
         # Create the appliances
         t3 = time.time()
         input_params, results = [], []
-        for i in range(len(model.transients)):
-            input_params.append((self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance']))
-        appliances, overall_powerflow = create_appliances([self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance']])
+        rest_powerflow = my_resample_highdef(steady_states['active transition'], steady_states.index[0], steady_states.index[-1], '5min', ['active transition'])
+        tmp = create_appliances([transients, rest_powerflow, self.model.params['min_appearance'], True])
         print("Put together appliance powerflows: " + str(time.time() - t3))
+        return tmp
    
 
 
