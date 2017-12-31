@@ -720,6 +720,8 @@ def latexify(fig_width=None, fig_height=None, columns=1, fontsize=8):
     """Set up matplotlib's RC params for LaTeX plotting.
     Call this before plotting a figure.
 
+    Din A4: 8.267 x 11.692 inches
+
     Parameters
     ----------
     fig_width : float, optional, inches
@@ -735,10 +737,10 @@ def latexify(fig_width=None, fig_height=None, columns=1, fontsize=8):
     assert columns in [1, 2]
 
     if fig_width is None:
-        fig_width = 3.39 if columns == 1 else 6.9  # width in inches
+        fig_width = 3.39 if columns == 2 else 6.9  # width in inches
 
     if fig_height is None:
-        golden_mean = (sqrt(5)-1.0)/2.0    # Aesthetic ratio
+        golden_mean = (math.sqrt(5)-1.0)/2.0    # Aesthetic ratio
         fig_height = fig_width * golden_mean  # height in inches
 
     MAX_HEIGHT_INCHES = 8.0
@@ -748,15 +750,15 @@ def latexify(fig_width=None, fig_height=None, columns=1, fontsize=8):
         fig_height = MAX_HEIGHT_INCHES
 
     params = {
-        'backend': 'ps',
-        'text.latex.preamble': ['\\usepackage{gensymb}'],
+        #'backend': 'ps',
+        #'text.latex.preamble': ['\\usepackage{gensymb}'],
         'axes.labelsize': fontsize,  # fontsize for x and y labels (was 10)
         'axes.titlesize': fontsize,
         'font.size': fontsize,
         'legend.fontsize': fontsize,
         'xtick.labelsize': fontsize,
         'ytick.labelsize': fontsize,
-        'text.usetex': True,
+        #'text.usetex': True,
         'figure.figsize': [fig_width, fig_height],
         'font.family': 'serif'
     }
