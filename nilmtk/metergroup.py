@@ -737,10 +737,17 @@ class MeterGroup(Electric):
         .. note:: Different AC types will be treated separately.
         """
         # Handle kwargs
-        sample_period = load_kwargs.setdefault('sample_period', self.sample_period())
+        if self.sample_period() == 0:
+            load_kwargs["high_res"] = True
+            if not 'sample_period' in load_kwargs:
+                load_kwargs.setdefault('sample_period', 1)
+        sample_period = load_kwargs['sample_period']
+        #sample_period = load_kwargs.setdefault('sample_period', self.sample_period())
+
         sections = load_kwargs.pop('sections', [self.get_timeframe()])
         chunksize = load_kwargs.pop('chunksize', MAX_MEM_ALLOWANCE_IN_BYTES)
-        duration_threshold = sample_period * chunksize
+        
+        duration_threshold = chunksize * sample_period
         columns = pd.MultiIndex.from_tuples(
             self._convert_physical_quantity_and_ac_type_to_cols(**load_kwargs)['cols'],
             names=LEVEL_NAMES)
@@ -1556,7 +1563,8 @@ class MeterGroup(Electric):
             return ax
 
         load_kwargs['sections'] = [timeframe]
-        load_kwargs = self._set_sample_period(timeframe, **load_kwargs)
+        if not 'sample_period' in load_kwargs:
+            load_kwargs = self._set_sample_period(timeframe, **load_kwargs)
         df = self.dataframe_of_meters(**load_kwargs)
 
         if threshold is not None:

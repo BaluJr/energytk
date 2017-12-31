@@ -44,7 +44,7 @@ from .metergroup import iterate_through_submeters_of_two_metergroups
 from .electric import align_two_meters
 from .elecmeter import ElecMeterID
 from nilmtk.timeframegroup import TimeFrame, TimeFrameGroup
-from nilmtk import Electric
+from nilmtk import Electric, plots
 import itertools
 import gc
 import pickle as pckl
@@ -523,8 +523,9 @@ def _pre_matching(prediction, ground_truth, metric, verbose = False):
             assignments[assign_to].append(i)
 
     # pckl.dump(assignments, open('tst_assignments.pckl','wb'))
-    # plot.plot_evaluation_assignments(gt_abovebaseload_sec, pred_abovebaseload_sec, assignments, ground_truth,
-    #                                 TimeFrame(timeframe.start, timeframe.start + pd.Timedelta("2d")))
+    #timeframe = gt_abovebaseload_sec[0][0]
+    #plots.plot_evaluation_assignments(gt_abovebaseload_sec, pred_abovebaseload_sec, assignments, ground_truth,
+    #                                    TimeFrame(timeframe.start, timeframe.start + pd.Timedelta("2d")))
     # stored_assignments = pckl.load(open('tst_assignments.pckl','rb'))
 
     assigned_metegroups = []

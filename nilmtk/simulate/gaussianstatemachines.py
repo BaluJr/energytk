@@ -45,13 +45,15 @@ class GaussianStateMachines(object):
         specs =[[((2000, 20, 10), (20, 10, 4)), ((-2000, 10, 15), (10, 3, 4))],                # Heater 1
                 [((1500, 30, 14), (10, 15, 4)), ((-1500, 10, 15), (10, 20, 4))],               # Heater 2
                 [((130, 10, 90), (10, 5, 30)),  ((-130, 10, 600), (10, 6, 100))],              # Fridge
-                [((300, 0, 60*60),(10, 5, 10)), ((-300, 0, 60*60*10),(10, 5, 10))],
-                [((40, 0, 50), (6, 1, 10)),     ((120, 0, 40), (15, 1, 10)),    ((-160, 20, 200), (10, 1, 30))],
-                [((100, 0, 40), (10, 5, 10)),   ((-26, 0, 180), (5, 1, 50)),    ((-74,5, 480), (15,1,50))]]
+                [((300, 0, 60*60),(10, 5, 10)), ((-300, 1, 60*60*10),(10, 5, 10))],
+                [((40, 0, 50), (6, 2, 10)),     ((120, 0, 40), (15, 2, 10)),    ((-160, 10, 200), (10, 1, 30))],
+                [((100, 0, 40), (10, 3, 10)),   ((-26, 0, 180), (5, 2, 50)),    ((-74,5, 480), (15,1,50))]]
         # Breaks as appearances, break duration, stddev
         break_spec = [[4, 60, 10], [6, 10*60,10], [7, 10*60,10], [2, 60,10], [4, 60, 10], [2, 60, 10]]
         for i, bs in enumerate(break_spec): 
             bs[0] = bs[0]*len(specs[i])
+
+        appliance_names = ['Synthetic Heater1', 'Synthetic Heater2', 'Fridge', 'Long appliance', 'Complex1', 'Complex2']
 
         # Generate powerflow for each appliance
         appliances = []
@@ -90,14 +92,19 @@ class GaussianStateMachines(object):
         building_path = '/building{}'.format(1)
         for appliance in range(len(appliances)):
             key = '{}/elec/meter{:d}'.format(building_path, appliance + 2)
-            appliances[appliance]['active transition'] = appliances[appliance]['active transition'].cumsum()
-            output_datastore.append(key, appliances[appliance][['active transition','spike']].rename(columns={'active transition':('power', 'active')}))
-        output_datastore.append('{}/elec/meter{:d}'.format(building_path, 1), transients[['active transition','spike']].rename(columns={'active transition':('power', 'active')}))
+            data = appliances[appliance]['active transition'].append(pd.Series(0, name='power active', index=appliances[appliance]['active transition'].index - pd.Timedelta('0.5sec')))
+            data = pd.DataFrame(data.sort_index().cumsum())
+            data.columns = pd.MultiIndex.from_tuples([('power', 'active')], names=['physical_quantity', 'type'])
+            output_datastore.append(key, data)
+        overall = transients['active transition'].append(pd.Series(0, name='power active', index=appliances[appliance]['active transition'].index - pd.Timedelta('0.5sec')))
+        overall = pd.DataFrame(overall.sort_index().cumsum())
+        overall.columns = pd.MultiIndex.from_tuples([('power', 'active')], names=['physical_quantity', 'type'])
+        output_datastore.append('{}/elec/meter{:d}'.format(building_path, 1), overall)
         num_meters = len(appliances) + 1
 
         # Write the metadata
         timeframe = TimeFrame(start = transients.index[0], end = transients.index[-1])
-        self._save_metadata_for_disaggregation(output_datastore, timeframe, num_meters)
+        self._save_metadata_for_disaggregation(output_datastore, timeframe, num_meters, appliance_names)
 
         # The immediate result
         steady_states = transients[['active transition']].cumsum()#.rename({'active transition':'active average'})
@@ -106,7 +113,7 @@ class GaussianStateMachines(object):
         return transients, steady_states
     
         
-    def _save_metadata_for_disaggregation(self, output_datastore, timeframe, num_meters):
+    def _save_metadata_for_disaggregation(self, output_datastore, timeframe, num_meters, appliancetypes):
         """ 
         Stores the metadata within the storage.
 
@@ -132,6 +139,9 @@ class GaussianStateMachines(object):
             The TimeFrames over which this data is valid for.
         num_meters : [int]
             Required if `supervised=False`, Gives for each phase amount of meters
+        appliancetypes: [str]
+            The names for the different appliances. Is used in plots and error metric
+            tables.
         """
 
         # Global metadata
@@ -193,7 +203,7 @@ class GaussianStateMachines(object):
             update_elec_meters(meter_instance=chan)
             appliance = {
                 'meters': [chan],
-                'type': 'unknown',
+                'type': appliancetypes[chan-2],
                 'instance': chan - 1
             }
             appliances.append(appliance)

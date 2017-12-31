@@ -18,7 +18,7 @@ import pytz
 from .meterseries import MeterSeries
 from .timeframe import TimeFrame
 from .measurement import select_best_ac_type
-from .utils import (offset_alias_to_seconds, convert_to_timestamp,
+from .utils import (offset_alias_to_seconds, convert_to_timestamp, normalise_timestamp,
                     flatten_2d_list, append_or_extend_list,
                     timedelta64_to_secs, safe_resample)
 from .plots import plot_series
@@ -163,7 +163,8 @@ class Electric(MeterSeries):
                 # sampling rate far lower than the events frequeny.
                 def resample_func(df):
                     sample_period_str = '{:d}S'.format(sample_period)
-                    new_idx = pd.DatetimeIndex(start=df.timeframe.start, end=df.timeframe.end, freq=sample_period_str)
+                    start = normalise_timestamp(df.timeframe.start, sample_period_str) 
+                    new_idx = pd.DatetimeIndex(start=start, end=df.timeframe.end, freq=sample_period_str)
                     if df.empty:
                         # Potentially a bug, since it does not recognize on-sections longer than load_sec
                         # Ignore for now, but have to solve in the future by keeping it nan and ffill.
