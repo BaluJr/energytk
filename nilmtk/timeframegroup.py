@@ -393,12 +393,12 @@ class TimeFrameGroup():
             myend = timeframe.end
 
         # Cut front
-        self._df  = self._df[self._df["section_end"] > start]
-        self._df.loc[self._df["section_start"] < start,"section_start"] = start
+        self._df  = self._df[self._df["section_end"] > mystart]
+        self._df.loc[self._df["section_start"] < mystart,"section_start"] = mystart
 
         # Cut end
-        self._df  = self._df[self._df["section_start"] < end]
-        self._df.loc[self._df["section_end"] > end,"section_end"] = end
+        self._df  = self._df[self._df["section_start"] < myend]
+        self._df.loc[self._df["section_end"] > myend,"section_end"] = myend
 
 
     def invert(self, start = None, end = None):
