@@ -706,7 +706,7 @@ def find_appliances(params):
         if segi == 1:
             segi += 1
             continue
-        labels = myviterbi_numpy_faster(segment[['active transition', 'spike']].values, appliances)
+        labels = myviterbi_numpy_faster(segment[['active transition', 'spike']].values.astype(np.float32), appliances)
 
         # Translate labels and update transients
         reallabels = pd.DataFrame(columns=['segmentsize','subtype','appliance'], index = transients.loc[transients['segment'] == segmentid].index)
@@ -1238,8 +1238,8 @@ class EventbasedCombination(UnsupervisedDisaggregator):
                             values = np.array(power_dataframe.iloc[:,0])
                             input_params.append((indices, values, model.params['min_n_samples'],
                                                 model.params['state_threshold'], model.params['noise_level']))
-                            states_and_transients.append(find_transients_fast(input_params[-1]))
-                        #states_and_transients = pool.map(find_transients_fast, input_params)
+                            #states_and_transients.append(find_transients_fast(input_params[-1]))
+                        states_and_transients = pool.map(find_transients_fast, input_params)
                         for i in range(len(metergroup)):
                             steady_states_list[i].append(states_and_transients[i][0])
                             transients_list[i].append(states_and_transients[i][1])

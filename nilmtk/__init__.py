@@ -15,6 +15,7 @@ from nilmtk.building import Building
 from nilmtk.dataset import DataSet
 from nilmtk.externdataset import ExternDataSet
 from nilmtk.datasetanalysis import DatasetAnalysis
+from nilmtk.UseCaseExecuter import UseCaseExecuter
 
 global_meter_group = MeterGroup()
 
