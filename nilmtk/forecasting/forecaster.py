@@ -128,13 +128,15 @@ class Forecaster(Processing):
         chunk: pd.DataFrame
             The power series
         '''
-        if type(meters) is DataSet:
+        if type(meters) is pd.DataFrame:
+            chunk = meters
+        elif type(meters) is DataSet:
             if section is None:
                 section = meters.get_timeframe(intersection_instead_union=True)
             sections = TimeFrameGroup([section])
             chunk = meters.power_series_all_data(verbose = True, sample_period=3600, sections=sections).dropna()
         else:
-            chunk = pd.DataFrame(pckl.load(open(meters, "rb"))).bfill().ffill() 
+            chunk = pd.DataFrame(pckl.load(open(meters, "rb"))).bfill().ffill()[:-1344]
         return chunk
 
 
@@ -172,7 +174,7 @@ class Forecaster(Processing):
 
     #region Data augmentation help functions
 
-    def _addShiftsToChunkAndReduceToValid(self, chunk, past_shifts, model_horizons):
+    def _addShiftsToChunkAndReduceToValid(self, chunk, shifts_target_based, shifts_lastentry_based, model_horizons, for_forecasting):
         '''Add shifts to the chunk.
         This function takes the current chunk of the meter and adapts it sothat
         it can be used for training. That means it extends the dataframe by the 
@@ -183,12 +185,18 @@ class Forecaster(Processing):
         ---------
         chunk: pd.DataFrame
             The input which have to be augmented 
-        past_shifts: [int,...]
-            The set of shifts which have to be incorporated from the past due to the 
-            history, which are incorporated into the forecast.
+        shifts_target_based: [int,...]
+            These shifts are counted from the target on.
+        shifts_lastentry_based: [int,...]
+            These shifts are counted from the place
         model_horizons:
             The horizons into the future which are trained. Also influences the shifts 
             which have to be prepared.
+        for_forecasting: bool
+            Whether it is for forecasting. This changes how the shifts are arranged.
+            This is due to the fact that during training the given index is oriented at the
+            forecasting target and for the forecasting it is oriented at the last available
+            index.
 
         Returns
         -------
@@ -198,7 +206,12 @@ class Forecaster(Processing):
         '''
         # Determine the shifts that are required
         chunk = chunk.copy()
-        all_shifts = set(np.array(list(itertools.product(past_shifts, model_horizons))).sum(1))
+        if for_forecasting:
+            combinations = np.array(list(itertools.product(shifts_target_based, model_horizons)))
+            all_shifts = set(np.append(combinations[:,0] - combinations[:,1], shifts_lastentry_based))
+        else:
+            combinations = np.array(list(itertools.product(shifts_lastentry_based, model_horizons)))
+            all_shifts = set(np.append(combinations[:, 0] + combinations[:, 1], shifts_target_based))
 
         # Create the shifts and return
         for i in all_shifts:

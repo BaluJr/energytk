@@ -31,6 +31,8 @@ class AnnForecasterModel(Sequence):
     This is the model used for forecasting. It is an enumerable with one set of the below attributes
     for each entry. Each entry represents one forecasting horizon
 
+    ATTENTION: Currently not checking for valid horizonts.Only until 1day supported currently.
+
     Attributes
     ----------
     ann_featurescaler: sklearn.preprocessing.StandardScaler
@@ -61,19 +63,19 @@ class AnnForecasterModel(Sequence):
 
     params = {
         # Which timesteps into the future we predict
-        'models': [1] + list(range(2, 98, 24)),
+        'models': list(range(16, 98, 16)),
         
         # Amount of data used for validation
         'validation_quota': 0.1,
         
         # Learning Rate
-        'learning_rate': 0.005,
+        'learning_rate': 0.015,
 
         # How many errors are taken together until training step
         'size_minibatches': 10,
 
         # How often each minibatch is trained
-        'epochs': 1,
+        'epochs': 250,
 
         # Resolution of one step
         'resolution': '15m',
@@ -83,42 +85,56 @@ class AnnForecasterModel(Sequence):
         'external_features': [],#[('temperature', '')],#, ('national', ''), ('school', '')],#, ('dewpoint', '')], #, 'time'
         
         # How the daytime is regarded
-        'hourFeatures': [('hour', '00-03'), ('hour', '03-06'), ('hour', "06-09"), ('hour', "09-12"), ('hour', "12-15"), ('hour', "15-18"), ('hour', "18-21"), ('hour', "21-24")],
+        'hourFeatures': [('hour', '00-01'), ('hour', "01-02"), ('hour', "02-03"), ('hour', "03-04"), ('hour', "04-05"),
+                     ('hour', "05-06"), ('hour', "06-07"), ('hour', "07-08"), ('hour', "08-09"), ('hour', "09-10"),
+                     ('hour', "10-11"), ('hour', "11-12"), ('hour', "12-13"), ('hour', "13-14"), ('hour', "14-15"),
+                     ('hour', "15-16"), ('hour', "16-17"), ('hour', "17-18"), ('hour', "18-19"), ('hour', "19-20"),
+                     ('hour', "20-21"), ('hour', "21-22"), ('hour', "22-23"), ('hour', "23-24")],
 
-        # Shifts are the prev days
-        'shifts': list(range(96,192,4)) + [cur*96 for cur in range(3,7)], #+ [cur*24*7 for cur in range(4)],
-        
+        # Shifts relative to the previous available
+        'shifts_lastentry_based': list(range(0, 17, 4)),
+
+        # Shifts relative to the target
+        'shifts_target_based': [cur*4*24 for cur in range(1,7)] + [cur*4*24*7 for cur in range(1,5)],
+
         # How the weekdays are paired
-        'weekdayFeatures': [('week', "0-5"),('week', "5-6"),('week',"6-7")],
+        'weekdayFeatures': [('week', "0-1"),('week', "1-2"),('week', "2-3"),('week', "3-4"),('week', "4-5"),('week', "5-6"),('week',"6-7")],
         
         # Number of hidden layers of the ANN
         'num_hidden_layers': 2,
 
         # Dimensionality of the ANN's hidden layers
-        'hidden_layers_dim': 50,
+        'hidden_layers_dim': 30,
 
 
         # Whether to give debug output during training.
         'debug': False,
         
         # Define output
-        'training_progress_output_freq': 40,
+        'training_progress_output_freq': 10900,
     }
 
 
-    def __init__(self, **args):
+    def __init__(self, path = None, args = {}):
         '''
         The paramters are set to the optional paramters handed in by the constructor.
         '''
-        for arg in args:
-            self.params[arg] = args[arg]
-        self.model = [
-            {'trainer':None, 
-             'input':None, 
-             'labels':None, 
-             'model':None,
-             'plotdata': {"batchnumber":[], "loss":[], "error":[]}
-            }] * len(self.params['models'])
+        self.untrained = True
+        self.target_folder = None
+        if not path is None:
+            self.target_folder = path
+            self.load()
+        else:
+            for arg in args:
+                self.params[arg] = args[arg]
+            self.model = [
+                {   'trainer':None,
+                    'input':None,
+                    'labels':None,
+                    'model':None,
+                    'plotdata': {"batchnumber":[], "loss":[], "error":[], "avg_power":[]}
+                } for _ in range(len(self.params['models']))]
+
 
     def set_model(self, i, element, new_model):
         self.model[i] = new_model
@@ -162,14 +178,13 @@ class AnnForecasterModel(Sequence):
         plt.show()
 
         
-    def store(self, folder):
+    def store(self):
         ''' Stores the model in a certain folder.
         A folder is given as certain models cannot be stored within a single file.
-        
-        folder: str
-            Folder in which the model is persistently stored
         '''
+
         # Cancel if folder already exists and contains elements
+        folder = self.target_folder
         if os.path.isdir(folder):
             pass
             #if len(os.listdir(folder)) != 0:
@@ -179,17 +194,38 @@ class AnnForecasterModel(Sequence):
 
         # Store the cntk model and remove
         for i, cur in enumerate(self):
+            cur['trainer'].model.save(folder + str(i) + "/model.dnn")
             cur["trainer"].save_checkpoint(folder + str(i) + "/.trainer")
-            
-        del cur['trainer'] # Don't ask me why these are all the same objects for all iterates
-        del cur['input']
-        del cur['label']
-        
-        # The rest can be pickled normally 
-        pckl.dump(self, open(folder+ "model", "wb")) 
+            cur['tensorboard_writer'].flush()
+            open(folder + str(i) + "/" + str(self.params['models'][i]) ,"w+").close()
+
+        # Store the basemodel
+        all_to_store = {}
+        models_to_store = []
+        for cur in self:
+            to_store = {}
+            for cur_to_store in cur:
+                if cur_to_store in ['trainer', 'input','label', 'model', 'tensorboard_writer']:
+                    continue
+                to_store[cur_to_store] = cur[cur_to_store]
+            models_to_store.append(to_store)
+        all_to_store["model"] = models_to_store
+        all_to_store["labelscaler"] = self.labelscaler
+        all_to_store["featurescaler"] = self.featurescaler
+        all_to_store["params"] = self.params
+        all_to_store["target_folder"] = self.target_folder
+        all_to_store["untrained"] = self.untrained
+        pckl.dump(all_to_store, open(folder+ "basemodel", "wb"))
+
+        # Store meta information
+        tmp = open(folder + "model.txt" ,"w+")
+        tmp.write(str(self.params))
+        tmp.write("\n##################\n")
+        tmp.write(str(list(list(map(lambda m: m['plotdata'], self)))))
+        tmp.close()
     
 
-    def load(folder):
+    def load(self):
         ''' Loads the model from the designated folder.
         A folder is given as certain models cannot be stored within a single file.
         
@@ -197,26 +233,28 @@ class AnnForecasterModel(Sequence):
             Folder in which the model can be found
         '''
         # Cancel if folder already exists and contains elements
+        folder = self.target_folder
+        if not folder.endswith("/"):
+            folder += "/"
         if not os.path.isdir(folder):
             raise Exception("The designated folder does not exist.")
 
         # First reload the base model
-        try:
-            model = pckl.load(open(folder+ "/basemodel", "rb")) 
-        except:
-            model = AnnForecasterModel()
-        
-        # Store the cntk model and remove (not working yet)
-        for i, cur in enumerate(model):
-            cur['model'] = C.load_model(folder + str(i) + '/model.dnn')
-            #cur['ann_input'] = cur['model']['ann_input']
-            #cur['lstm_input'] = cur['model']['lstm_input']
+        model_data = pckl.load(open(folder+ "basemodel", "rb"))
+        self.model = model_data["model"]
+        self.labelscaler = model_data["labelscaler"]
+        self.featurescaler = model_data["featurescaler"]
+        self.params = model_data["params"]
+        self.target_folder = model_data["target_folder"]
+        self.untrained = model_data["untrained"]
+
+        # Load the cntk model and remove (not working yet)
+        for i, cur in enumerate(self.model):
+            cur['model'] = m = C.load_model(folder + str(i) + '/model.dnn')
+            cur['input'] = cur['model'].arguments[0]  # cur['model']['ann_input']
+            cur["label"] = m(cur['model'].arguments[0])
             #cur["trainer"].load_checkpoint(folder + str(i) + "/.trainer")
             #cur["trainer"].restore_from_checkpoint(folder + str(i) + "/.trainer")
-            #cur['ann_input'] = cur["trainer"].model['ann_input']
-            #cur['lstm_input'] = cur['trainer'].model['lstm_input']
-
-        return model
 
 
 
@@ -236,7 +274,7 @@ class AnnForecaster(Forecaster):
     # The related model
     model_class = AnnForecasterModel
 
-    def __init__(self, model = None, folder = None):
+    def __init__(self, model = None):
         """
         Constructor of this class which takes an optional model as input.
         If no model is given, it creates a default one.
@@ -248,8 +286,6 @@ class AnnForecaster(Forecaster):
         folder: str
             When set, the model is reconstructed from the content of the designated folder.
         """
-        if not folder is None:
-            model = AnnForecasterModel.load(folder)
 
         super(AnnForecaster, self).__init__(model)
 
@@ -265,7 +301,7 @@ class AnnForecaster(Forecaster):
         return result/len(X[labeltxt])
 
     
-    def _prepare_data(self, chunk, ext_dataset):
+    def _prepare_data(self, chunk, ext_dataset, for_forecasting):
         ''' Adds the additional featues to the data
         
         Parameters
@@ -274,7 +310,12 @@ class AnnForecaster(Forecaster):
             Chunk to extend
         ext_dataset: nilmtk.DataSet or str
             The External Dataset containing the fitting data.
-            Alternatively a path to a PickleFile. 
+            Alternatively a path to a PickleFile.
+        for_forecasting: bool
+            Whether it is for forecasting. This changes how the shifts are arranged.
+            This is due to the fact that during training the given index is oriented at the
+            forecasting target and for the forecasting it is oriented at the last available
+            index.
         
         Returns
         -------
@@ -285,24 +326,27 @@ class AnnForecaster(Forecaster):
         power_column = [('power', 'active')] #meters._convert_physical_quantity_and_ac_type_to_cols(physical_quantity = 'power', ignore_missing_columns = True)['cols']
         chunk = self._add_time_related_features(chunk, params['weekdayFeatures'], params['hourFeatures'])
         chunk = self._add_external_data(chunk, ext_dataset, self.model.params['external_features'])
-        chunk = self._addShiftsToChunkAndReduceToValid(chunk, params['shifts'], params['models'])
+
+        #allshifts = params['shifts_target_based'] + list(map(lambda e: e + , params['shifts_lastentry_based']))
+        chunk = self._addShiftsToChunkAndReduceToValid(chunk, params['shifts_target_based'], params['shifts_lastentry_based'], params['models'], for_forecasting)
         return chunk
 
-    def _model_creation(self, modelnumber, tensorboard_folder = None):
+    def _model_creation(self, modelnumber, target_folder = None):
         ''' Create the ANN model for time series forecasting 
 
         Parameters
         ----------
         modelnumber: int
             The number of model to create. Needed to look up its params.
-        tensorboard_folder: str
+        target_folder: str
             path where the tensorboard output shall be stored.
         '''
         
 
         # Define input and output which his fixed
         params = self.model.params
-        input_dim = len(params['external_features']) + len(params['shifts']) + len(params['hourFeatures']) + len(params['weekdayFeatures'])
+        input_dim = len(params['external_features']) + len(params['hourFeatures']) + len(params['weekdayFeatures']) \
+                    + len(params['shifts_target_based']) + len(params['shifts_lastentry_based'])
         input_dynamic_axes = [C.Axis.default_batch_axis()]
         self.model[modelnumber]['input'] = input = C.input_variable(input_dim)#, dynamic_axes=input_dynamic_axes)
         self.model[modelnumber]['label'] = label = C.input_variable(1)#, dynamic_axes=input_dynamic_axes)
@@ -316,23 +360,38 @@ class AnnForecaster(Forecaster):
         if params['debug']:
             z = debug_model(z)
 
-        # Define error metric and trainer
-        loss = C.squared_error(z, label)        # cross_entropy_with_softmax(z, label)      # For training on training data
-        label_error = self.mae(z, label)       # C.classification_error(z, label)          # For error on test data
-        lr_schedule = C.learning_rate_schedule(params['learning_rate'], C.UnitType.minibatch)
-        moment_schedule = C.momentum_schedule([0.99,0.9], 1000)
-        learner = C.adam(z.parameters, lr_schedule, minibatch_size = 1, momentum = moment_schedule)
-        if not tensorboard_folder is None:
-            tensorboard_writer = TensorBoardProgressWriter(freq=10, log_dir=tensorboard_folder + str(modelnumber) + "/", model=z)
-            self.model[modelnumber]['tensorboard_writer'] = tensorboard_writer
-            self.model[modelnumber]['trainer'] = C.Trainer(z, (loss, label_error), [learner], tensorboard_writer)
-        else:
-            self.model[modelnumber]['trainer'] = C.Trainer(z, (loss, label_error), [learner])
+        # Define output
+        #self.model[modelnumber]['label'] = l = C.input_variable(1, dynamic_axes=z.dynamic_axes, name="y")
         self.model[modelnumber]['model'] = z
 
 
+    def _setup_metric_and_trainer(self, modelnumber, z, l, target_folder=None):
+        """ Create the trainer for a model.
 
-    def train(self, meters, ext_dataset, section = None, tensorboard_folder = None, verbose = False):
+        Parameters
+        ----------
+        modelnumber: int
+            Forecasting horizon this model is trained for.
+        z: Cntk.model
+            The model to train.
+        l: str
+            path where the tensorboard output shall be stored.
+        target_folder: str
+            path where the tensorboard output shall be stored.
+        """
+        params = self.model.params
+
+        loss = C.squared_error(z, l)        # cross_entropy_with_softmax(z, label)      # For training on training data
+        label_error = self.mae(z, l)       # C.classification_error(z, label)          # For error on test data
+        lr_schedule = C.learning_rate_schedule(params['learning_rate'], C.UnitType.minibatch)
+        moment_schedule = C.momentum_schedule([0.99,0.9], 1000)
+        learner = C.adam(z.parameters, lr_schedule, momentum = moment_schedule)
+        tensorboard_writer = TensorBoardProgressWriter(freq=10, log_dir=target_folder + str(modelnumber) + "/", model=z)
+        self.model[modelnumber]['tensorboard_writer'] = tensorboard_writer
+        self.model[modelnumber]['trainer'] = C.Trainer(z, (loss, label_error), [learner], tensorboard_writer)
+
+
+    def train(self, meters, ext_dataset, section = None, target_folder = None, verbose = False):
         '''
         Does the training of the neural network. Each load chunk is translated into 
         multiple minibatches used for training the network.
@@ -347,24 +406,35 @@ class AnnForecaster(Forecaster):
             Alternatively a path to a PickleFile. 
         section: nilmtk.TimeFrame
             The timeframe used for training. Meters have to be valid within this region.
-        tensorboard_folder: str
+        target_folder: str
             path where the tensorboard output shall be stored.
         verbose: bool
             Whether additional output shall be printed during training.
         '''
-        
+        global CANCELLED
+        CANCELLED = False
+
         params = self.model.params
+        if target_folder != None:
+            if not target_folder.endswith("/"):
+                target_folder += "/"
+            self.model.target_folder = target_folder
+        else:
+            target_folder = self.model.target_folder
+        self.model.untrained = False
 
         # A) Load the data
         chunk = self._load_data(meters)
 
         # B) Prepare the data
-        chunk = self._prepare_data(chunk, ext_dataset)        
+        chunk = self._prepare_data(chunk, ext_dataset, for_forecasting=False)
+        chunk = chunk.dropna()
 
         # C) Create the model
         horizons = self.model.params['models']
         for horizon in range(len(horizons)):
-            self._model_creation(horizon, tensorboard_folder)
+            self._model_creation(horizon, target_folder)
+            self._setup_metric_and_trainer(horizon, self.model[horizon]['model'], self.model[horizon]['label'], target_folder=target_folder)
 
         # D) Arrange the labels
         train_test_mask = np.random.rand(len(chunk)) < 0.8
@@ -374,44 +444,51 @@ class AnnForecaster(Forecaster):
         training_labels = labels[train_test_mask]
         testing_labels = labels[~train_test_mask]
         
-        self.model.featurescaler = scaler = StandardScaler() 
-        chunk = chunk.dropna()
-        chunk.loc[:,:] = scaler.fit_transform(chunk.dropna())
+        self.model.featurescaler = scaler = StandardScaler()
+        chunk[('power', 'active')] = scaler.fit_transform(chunk[[('power','active')]])
+        chunk['shifts'] = scaler.transform(chunk['shifts'])
 
-        # Go through all horizons
-        for j, horizon in enumerate(params['models']):
+        # Repeat epochs
+        num_minibatches = train_test_mask.sum() // params['size_minibatches']
+        epoch = 0
+        while not CANCELLED:
+            # Go through all horizons
             start = time.time()
-            model = self.model[j]
+            for j, horizon in enumerate(params['models']):
+                model = self.model[j]
 
-            # E) Arrange the input for model j
-            columns = copy.deepcopy(params['external_features'])
-            for shift in params['shifts']:
-                columns.append(('shifts',str(shift+horizon)))
-            columns.extend(params['hourFeatures'] + params['weekdayFeatures'])
-            features = np.asarray(chunk[columns], dtype = "float32")
-            training_features = features[train_test_mask]
-            testing_features = features[~train_test_mask]
+                # E) Arrange the input for model j
+                columns = copy.deepcopy(params['external_features'])
+                for shift in params['shifts_target_based']:
+                    columns.append(('shifts',str(shift)))
+                for shift in params['shifts_lastentry_based']:
+                    columns.append(('shifts',str(shift+horizon)))
+                columns.extend(params['hourFeatures'] + params['weekdayFeatures'])
+                features = np.asarray(chunk[columns], dtype = "float32")
+                training_features = features[train_test_mask]
+                testing_features = features[~train_test_mask]
 
-            # Do the training batch per batch
-            num_minibatches = training_features.shape[0] // params['size_minibatches']
-            for mb in range(num_minibatches*self.model.params['epochs']):
-                items = np.random.choice(len(training_features), params['size_minibatches'])
-                features = np.ascontiguousarray(training_features[items])
-                labels = np.ascontiguousarray(training_labels[items])
-                    
-                # Specify the mapping of input variables in the model to actual minibatch data to be trained with
-                
-                model['trainer'].train_minibatch({model['input'] : features, model['label'] : labels})                    
-                if mb % params['training_progress_output_freq'] == 0:
-                    self._track_training_progress(j, mb, testing_features, testing_labels, verbose = verbose)
+                # Do the training batch per batch
+                for mb in range(num_minibatches):
+                    items = np.random.choice(len(training_features), params['size_minibatches'])
+                    features = np.ascontiguousarray(training_features[items])
+                    labels = np.ascontiguousarray(training_labels[items])
 
-            model['trainer'].model.save(tensorboard_folder + str(j) + "/model.dnn")
-            model['tensorboard_writer'].flush()
-            model['trainer'].save_checkpoint(tensorboard_folder + str(j) + "/lstm.checkpoint")
-            print("Training took {:.1f} sec".format(time.time() - start))
-            
-            self.model.store(tensorboard_folder)
-            return model
+                    # Specify the mapping of input variables in the model to actual minibatch data to be trained with
+                    model['trainer'].train_minibatch({model['input'] : features, model['label'] : labels})
+                    if mb % params['training_progress_output_freq'] == 0:
+                        self._track_training_progress(j, mb, testing_features, testing_labels, verbose = verbose)
+
+            # After each epoch, store the progress
+            self.model.store()
+            print("Epoch {0} took {1:.1f} sec".format(epoch, time.time() - start))
+
+            epoch += 1
+            if (params['epochs'] > 0 and epoch >= params['epochs']):
+                CANCELLED = True
+
+        self.model.store()
+        return model
 
 
     def forecast(self, meters, ext_dataset, timestamps, verbose = False):
@@ -450,7 +527,9 @@ class AnnForecaster(Forecaster):
 
         # Prepare the input
         chunk = self._load_data(meters)
-        chunk = self._prepare_data(chunk, ext_dataset)
+        chunk = self._prepare_data(chunk, ext_dataset, for_forecasting=True)
+        chunk['shifts'] = self.model.featurescaler.transform(chunk['shifts'])
+
 
         # Determine the indices inside the dataset
         items = pd.Series(index = chunk.index, data= range(len(chunk)))
@@ -461,8 +540,10 @@ class AnnForecaster(Forecaster):
             
             # E) Arrange the input for model j
             columns = copy.deepcopy(params['external_features'])
-            for shift in params['shifts']:
-                columns.append(('shifts',str(shift+horizon)))
+            for shift in params['shifts_target_based']:
+                columns.append(('shifts',str(shift-horizon)))
+            for shift in params['shifts_lastentry_based']:
+                columns.append(('shifts',str(shift)))
             columns.extend(params['hourFeatures'] + params['weekdayFeatures'])
             features = np.asarray(chunk[columns], dtype = "float32")
             z = self.model[j]['model']
@@ -476,7 +557,7 @@ class AnnForecaster(Forecaster):
        
 
                     
-    def _track_training_progress(self, j, mb, testing_features, testing_labels, verbose = False):
+    def _track_training_progress(self, modelnumber, mb, testing_features, testing_labels, verbose = False):
         ''' Writes training progress into the buffer.
         Calculates the error per minibatch and outputs the error with a given frequency.
 
@@ -502,15 +583,19 @@ class AnnForecaster(Forecaster):
         '''
 
         selection = np.random.choice(len(testing_features), 100)
-        training_loss = self.model[j]['trainer'].previous_minibatch_loss_average
-        eval_error = self.model[j]['trainer'].test_minibatch({self.model[j]['input'] : testing_features[selection], self.model[j]['label'] : testing_labels[selection]})
-        eval_error = eval_error * self.model.labelscaler.scale_[0]
+        model =  self.model[modelnumber]
 
-        self.model[j]['plotdata']["batchnumber"].append(mb)
-        self.model[j]['plotdata']["loss"].append(training_loss)
-        self.model[j]['plotdata']["error"].append(eval_error)
-        if verbose: 
-            print ("Minibatch: {0}, Loss: {1:.4f}, Error: {2:.2f}".format(mb, training_loss, eval_error))
-            
+        training_loss = model['trainer'].previous_minibatch_loss_average
+        eval_error = model['trainer'].test_minibatch({model['input'] : testing_features[selection], model['label'] : testing_labels[selection]})
+        eval_error = eval_error * self.model.labelscaler.scale_[0]
+        avg_power = (self.model.labelscaler.inverse_transform(testing_labels[selection])).mean()
+
+        model['plotdata']["batchnumber"].append(mb)
+        model['plotdata']["loss"].append(training_loss)
+        model['plotdata']["error"].append(eval_error)
+        model['plotdata']["avg_power"].append(avg_power)
+        if verbose:
+            print("Minibatch: {0}, Loss: {1:.4f}, Error: {2:.2f}, AvgPower: {3}".format(mb, training_loss, eval_error, avg_power))
+
         
 
