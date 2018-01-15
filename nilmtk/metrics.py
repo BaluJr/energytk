@@ -242,7 +242,7 @@ def mean_normalized_error_power(pred_meter, ground_truth_meter, etype = ("power"
     for aligned_meters_chunk in align_two_meters(ground_truth_meter, pred_meter, sample_period = 10):
         diff = aligned_meters_chunk['master'] - aligned_meters_chunk['slave']
         total_abs_diff += sum(abs(diff.dropna()))
-        sum_of_ground_truth_power += aligned_meters_chunk.icol(1).sum()
+        sum_of_ground_truth_power += aligned_meters_chunk['master'].sum()
     return total_abs_diff / sum_of_ground_truth_power
 
 
@@ -460,7 +460,7 @@ def mcc(pred_meter, ground_truth_meter, good_sections = None, etype = ("power","
 # From here on there are only metrics which give one single value for the
 # overall disaggregation.
 
-def _pre_matching(prediction, ground_truth, metric, verbose = False):
+def _pre_matching(prediction, ground_truth, metric = "MCC", plotting_path = False, verbose = False):
     """
     This help function matches the disaggregated appliances together using the given metric.
     The chosen metric should be a fast one like MCC which operates on the whole powerflows
@@ -484,6 +484,8 @@ def _pre_matching(prediction, ground_truth, metric, verbose = False):
         Fast metrics are those based on stats instead of the powerflow. (eg. MCC)
         (When some appliances fit perfectly to a certain appliance,
         they are combined as a single instance.)
+    plotting_path: str or False
+        Where to store the plot
 
     Returns
     -------
@@ -522,11 +524,12 @@ def _pre_matching(prediction, ground_truth, metric, verbose = False):
         if assign_to != -1:
             assignments[assign_to].append(i)
 
-    # pckl.dump(assignments, open('tst_assignments.pckl','wb'))
-    #timeframe = gt_abovebaseload_sec[0][0]
-    #plots.plot_evaluation_assignments(gt_abovebaseload_sec, pred_abovebaseload_sec, assignments, ground_truth,
-    #                                    TimeFrame(timeframe.start, timeframe.start + pd.Timedelta("2d")))
-    # stored_assignments = pckl.load(open('tst_assignments.pckl','rb'))
+    if plotting_path:
+        timeframe = gt_abovebaseload_sec[0][0]
+        plots.latexify(fontsize=11)
+        plots.plot_evaluation_assignments(gt_abovebaseload_sec, pred_abovebaseload_sec, assignments, ground_truth,
+                                        TimeFrame(timeframe.start, timeframe.start + pd.Timedelta("2d")))
+        plt.savefig(plotting_path + "\matching_plot.png")
 
     assigned_metegroups = []
     for assignment in assignments:
@@ -539,7 +542,7 @@ def _pre_matching(prediction, ground_truth, metric, verbose = False):
 
 
 # Errors in both (assignment AND amount of energy)
-def total_energy_correctly_assigned(prediction, ground_truth, tolerance = 0, etype = ("power","active")):
+def total_energy_correctly_assigned(prediction, ground_truth, tolerance = 0, etype = ("power","active"), plotting_path = False):
     """ J) TECA
 
     Parameters
@@ -549,12 +552,20 @@ def total_energy_correctly_assigned(prediction, ground_truth, tolerance = 0, ety
     ground_truth: MeterGroup
         The original appliances recorded by plugs and included within the 
         source dataset.
+    plotting_path: str or False
+        The path where to store plots if shall be done
     """
 
-    assigned_metegroups = _pre_matching(prediction, ground_truth, "mcc")
+    assigned_metegroups = _pre_matching(prediction, ground_truth, "mcc", plotting_path = plotting_path)
     overall_error = 0
     overall_gt_power = 0
     for gt, pred in zip(ground_truth.meters, assigned_metegroups):
+        if len(pred) == 0:
+            gt_power = gt.power_series_all_data(sample_period=10)
+            overall_error += gt_power.abs().sum()
+            overall_gt_power += gt_power.sum()
+            continue
+
         for aligned_meters_chunk in align_two_meters(gt, pred, sample_period=10):  # gt is master
             diff = aligned_meters_chunk['master'] - aligned_meters_chunk['slave']
             diff.dropna(inplace=True)
@@ -618,7 +629,7 @@ metrics_dictionary = {
     'I_F1':
         {'lbl': "F1-Score", 'fn': f1_score, 'better': 1, "usecase":["all", "one"]},
     'Accuracy':
-        {'lbl': "Accuracy", 'fn': accuracy, 'better': 1},
+        {'lbl': "Accuracy", 'fn': accuracy, 'better': 1, "usecase":["all", "one"]},
     'MCC':
         {'lbl': "MCC", 'fn': mcc, 'better': 1, "usecase":["all", "one"]},
 
@@ -637,7 +648,7 @@ metrics_dictionary = {
 
 
 def calculate_metrics_per_appliances(metrics, prediction, ground_truth, prematching, timeframe = None,
-                                           type = ('power', 'active'), verbose = False):
+                                           type = ('power', 'active'), plotting_path = False, verbose = False):
     ''' Calculates the metrics per ground truth appliance instead for the powerflow as a whole.
 
     Calculates the metrics for the given ground_truth and prediction.
@@ -674,6 +685,8 @@ def calculate_metrics_per_appliances(metrics, prediction, ground_truth, prematch
     type: index
         When meters or DataFrames are given, this function defines which dimension is 
         used for determining the error. Default ('power', 'active').    
+    plotting_path: str or False
+        The path where to store plots if shall be done
     verbose: bool
         If additional output shall be given.
     '''
@@ -687,16 +700,18 @@ def calculate_metrics_per_appliances(metrics, prediction, ground_truth, prematch
             .intersection(prediction.get_timeframe(intersection_instead_union=True))
 
     # Calculate all given metric based on the matching
-    assigned_metegroups = _pre_matching(prediction, ground_truth, verbose)
+    assigned_metegroups = _pre_matching(prediction, ground_truth, plotting_path=plotting_path, verbose=verbose)
     metric_names = [metrics_dictionary[metric]["lbl"] for metric in metrics]
     result = pd.DataFrame(index = metric_names)
     cur_metric_results = {}
     for metric in metrics:
         name = metrics_dictionary[metric]['lbl']
+        if verbose:
+            print("Calculate " + name)
         fn = metrics_dictionary[metric]['fn']
         for gt, pred in zip(ground_truth.meters, assigned_metegroups):
             cur_metric_results = fn(pred, gt, etype = type)
-            appliance_name = gt.appliances[0].type['type']
+            appliance_name = gt.appliances[0].metadata['type']
             result.loc[name, appliance_name] = cur_metric_results
     return result
 

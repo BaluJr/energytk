@@ -176,6 +176,9 @@ class TimeFrameGroup():
         groups: [nilmtk.TimeFrameGroup]
             The group of timeframegroups to calculate the intersection for.
         '''
+        if any(map(lambda grp: len(grp._df) == 0, groups)):
+            return TimeFrameGroup()
+
         all_events = pd.Series()
         for group in groups:
             all_events = all_events.append(pd.Series(1, index=pd.DatetimeIndex(group._df['section_start'])))
@@ -183,9 +186,9 @@ class TimeFrameGroup():
         all_events.sort_index(inplace=True)
         all_active = (all_events.cumsum()==len(groups))
         starts = all_events.index[all_active]
-        ends = all_active.shift(1)
-        if len(ends > 0):
-            ends[0] = False
+        ends = all_active.shift(1).fillna(False)
+        #if len(ends > 0):
+        #    ends[0] = False
         ends = all_events[ends].index
         result = pd.DataFrame({'section_start': starts, 'section_end':ends})
         return TimeFrameGroup(result)
@@ -225,6 +228,9 @@ class TimeFrameGroup():
         groups: [nilmtk.TimeFrameGroup]
             The group of timeframegroups to calculate the matching for.
         '''
+        if any(map(lambda grp: len(grp._df) == 0, groups)):
+            return TimeFrameGroup()
+
         all_events = pd.Series()
         for group in groups:
             all_events = all_events.append(pd.Series(1, index=pd.DatetimeIndex(group._df['section_start'])))
@@ -346,6 +352,8 @@ class TimeFrameGroup():
 
         if isinstance(threshold, str):
             threshold = pd.Timedelta(threshold)
+        if isinstance(threshold, int):
+            threshold = pd.Timedelta(str(threshold) + "s")
 
         gap_larger = ((self._df["section_start"].shift(-1).ffill() - self._df["section_end"]) > threshold)
         gap_larger.iloc[-1] = True # keep last

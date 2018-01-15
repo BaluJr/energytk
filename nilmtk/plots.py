@@ -38,17 +38,18 @@ def plot_overall_power_vs_disaggregation(main_meter, disaggregations, verbose = 
     """
 
     # Create the main figure
-    fig = plt.figure(figsize=(50,50))#, tight_layout=True)
+    fig = plt.figure()#, tight_layout=True)
 
     # Create one bigger subplot for the overall power
-    timeframe = disaggregations.get_timeframe()
-    timeframe.start = timeframe.end - pd.Timedelta("20d")
+    timeframe = disaggregations.get_timeframe(intersection_instead_union = False)
+    timeframe.start = timeframe.end - pd.Timedelta("48h")
     ax = fig.add_subplot(4,1,1)
-    main_meter.plot(ax, timeframe=timeframe )
-    ax.set_xlim([timeframe.start, timeframe.end])
-    ax.set_xlabel('Time', fontsize=12)
-    ax.set_title('Disaggregation', fontsize=14)
-    #ax.set_ylabel('{0}'.format(i), fontsize=12)
+    if not main_meter is None:
+        main_meter.plot(ax, timeframe=timeframe, sample_period=2)
+        ax.set_xlim([timeframe.start, timeframe.end])
+        ax.set_xlabel('Time', fontsize=12)
+        ax.set_title('Disaggregation', fontsize=14)
+        #ax.set_ylabel('{0}'.format(i), fontsize=12)
 
     # Create multiple smaller ones for the disaggregated flows
     n = len(disaggregations.meters)
@@ -58,14 +59,15 @@ def plot_overall_power_vs_disaggregation(main_meter, disaggregations, verbose = 
         if verbose:
             print(str(i) + "/" + str(n))
         sub_ax = fig.add_subplot(sections, 1, size_main_figure+i+1)
-        dis.plot(sub_ax,timeframe=timeframe, plot_legend = False)
+        dis.plot(sub_ax,timeframe=timeframe, plot_legend = False, sample_period = 2)
         ax.get_shared_x_axes().join(ax, sub_ax)
         ax.get_shared_y_axes().join(ax, sub_ax)
         sub_ax.set_ylim(ax.get_ylim())
+        #sub_ax.set_xlim([timeframe.start, timeframe.end])
 
     # Link the axis
     plt.setp(ax.get_xticklabels(), visible=True)
-    fig.subplots_adjust(hspace=0.0)
+    #fig.subplots_adjust(hspace=0.0)
     return fig
 
 
@@ -97,7 +99,7 @@ def plot_phases(building, interval = pd.Timedelta("1d"), verbose = False):
 
 
 
-def plot_stackplot(disaggregations, total_power = None, verbose = True):
+def plot_stackplot(disaggregations, total_power = None, stacked = True, verbose = True):
     """ Plots a stackplot, which stacks all disaggregation results on top of each other.
 
     Parameters
@@ -116,28 +118,30 @@ def plot_stackplot(disaggregations, total_power = None, verbose = True):
         The newly plot figure
     """
 
-    timeframe = disaggregations.get_timeframe()
+    timeframe = disaggregations.get_timeframe(intersection_instead_union = False)
+    timeframe.start = timeframe.end - pd.Timedelta("48h")
 
     # Additional total power plot if demanded
     fig = plt.figure()
     if not total_power is None:
         ax = fig.add_subplot(211)
-        total_power.power_series_all_data(timeframe=timeframe, sample_period=300).plot(ax = ax)
+        total_power.power_series_all_data(sections=[timeframe], sample_period=2).plot(ax = ax)
         ax = fig.add_subplot(212)
     else:
         ax = fig.add_subplot(111)
 
     # The stacked plot
-    all = pd.DataFrame(disaggregations.meters[0].power_series_all_data(timeframe=timeframe).rename('Rest'))
+    all = pd.DataFrame(disaggregations.meters[0].power_series_all_data(sections=[timeframe], sample_period=2).rename('Rest'))
     for i, dis in enumerate(disaggregations.meters):
         if i == 0:
             continue
         name = "Appliance " + str(i)
         if verbose:
             print(name)
-        all[name] = dis.power_series_all_data(timeframe=timeframe)
-    all.fillna(0)
-    all.iloc[:,1:].plot.area(ax = ax)
+        all[name] = dis.power_series_all_data(sections=[timeframe], sample_period=2)
+    all = all.fillna(0)
+    all.plot.area(ax = ax, stacked = stacked)
+    ax.set_xlim([timeframe.start, timeframe.end])
     return fig
 
 
@@ -240,7 +244,7 @@ def plot_evaluation_assignments(sec_ground_truth, sec_disaggregations, assignmen
             print(str(i) + ": " + str(len(limited._df)))
         limited.plot(ax=ax)
         if not gt_meters is None:
-            ax.set_title(gt_meters.meters[i].appliances[0].type['type'])
+            ax.set_title(gt_meters.meters[i].appliances[0].metadata['type'])
         ax.set_xlim([timeframe.start, timeframe.end])
         plt.setp(ax.get_xticklabels(), visible=False)
         plt.setp(ax.get_yticklabels(), visible=False)
@@ -365,7 +369,7 @@ def plot_clustering(clusterers, elements, columns_to_project,
     data = elements[columns_to_project].values
     _, labels = np.unique(elements[subtype_column].values, return_inverse=True)
     labels = labels * 100 + elements[appliance_column].astype(int).values
-    confidence = elements[confidence_column]
+    confidence = elements[confidence_column].values
 
     # Call the plotting
     if len(columns_to_project) == 2:
@@ -408,6 +412,7 @@ def plot_clustering_2d(clusterers, data, labels, confidence, print_confidence = 
     fig = plt.figure()
     plot_kwargs.setdefault('cmap', plt.cm.Set3)
     color = plot_kwargs["cmap"](labels)
+    plot_kwargs["s"] = 5
 
     # Print the datapoints
     plt.scatter(data[confidence][:,0], data[confidence][:,1], c=color[confidence], alpha = 1, **plot_kwargs)
@@ -423,8 +428,8 @@ def plot_clustering_2d(clusterers, data, labels, confidence, print_confidence = 
             v, w = np.linalg.eigh(covar)
             v = print_confidence * np.sqrt(2.) * np.sqrt(v)
             #u = w[0] / linalg.norm(w[0]) # already normalized
-            w = w[0,:1] / np.linalg.norm(w[0,:1])
-            angle = np.arctan(w[0][1] / w[0][0])
+            w = w[0,:] / np.linalg.norm(w[0,:])
+            angle = np.arctan(w[1] / w[0])
             angle = 180. * angle / np.pi  # convert to degrees
             ell = mpl.patches.Ellipse(mean, v[0], v[1], 180. + angle, color='black', fill = False)
             ell.set_clip_box(fig.bbox)
@@ -716,7 +721,7 @@ def plot_pairwise_heatmap(df, labels, edgecolors='w', cmap=mpl.cm.RdYlBu_r, log=
 ################################################################
 # region Configurations
 
-def latexify(fig_width=None, fig_height=None, columns=1, fontsize=8):
+def latexify(fig_width=None, fig_height=None, columns=1, fontsize=10):
     """Set up matplotlib's RC params for LaTeX plotting.
     Call this before plotting a figure.
 

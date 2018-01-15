@@ -63,7 +63,7 @@ class AnnForecasterModel(Sequence):
 
     params = {
         # Which timesteps into the future we predict
-        'models': list(range(16, 98, 16)),
+        'models': list(range(4, 97, 4)),
         
         # Amount of data used for validation
         'validation_quota': 0.1,
@@ -75,7 +75,7 @@ class AnnForecasterModel(Sequence):
         'size_minibatches': 10,
 
         # How often each minibatch is trained
-        'epochs': 250,
+        'epochs': 150,
 
         # Resolution of one step
         'resolution': '15m',
@@ -111,7 +111,7 @@ class AnnForecasterModel(Sequence):
         'debug': False,
         
         # Define output
-        'training_progress_output_freq': 10900,
+        'training_progress_output_freq': 100,
     }
 
 

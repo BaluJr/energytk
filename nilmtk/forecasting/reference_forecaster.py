@@ -8,7 +8,7 @@ import pickle as pckl
 class ReferenceForecasterModel(object):
     params = {
         # The strategy to use: ["last_day_same_time", "last_week_same_time"]
-        'strategy': "last_day_same_time"
+        'strategy': "last_week_same_time"
     }
 
     model = None
