@@ -1,3 +1,4 @@
+import os
 
 class UseCaseExecuter:
     '''
@@ -16,24 +17,29 @@ class UseCaseExecuter:
     ----------
     usecase: python type
         The type of the class which shall be executed with the different paramters
+    usecase_model: python type
+        The type of the model which shall be executed with the different paramters
     target_folder: str
         The folder where the results are stored
     '''
     
-    def __init__(self, usecase, target_foler):
+    def __init__(self, usecase, usecase_model, target_folder):
         '''
         Paramter
         --------
         usecase: python type
             The type of the class which shall be executed with the different paramters
+        usecase_model: python type
+            The type of the model which shall be executed with the different paramters
         target_folder: str
             The folder where the results are stored
         '''
         self.usecase = usecase
         self.target_folder = target_folder
+        self.usecase_model = usecase_model
         if not target_folder.endswith("/"):
             target_folder += "/"
-        if not os.path.isdir(folder):
+        if not os.path.isdir(target_folder):
             os.mkdir(target_folder)
 
 
@@ -55,8 +61,9 @@ class UseCaseExecuter:
         '''
 
         for i, cur in enumerate(parameters):
-            cur_folder = target_folder + str(i)
-            cur_model = usecase(cur)
+            cur_folder = self.target_folder + "/"+ str(i)
+            cur_model = self.usecase_model(None, cur)
+            cur_usecase = self.usecase(model=cur_model)
             os.mkdir(cur_folder)
-            cur_model.train(self, dataset, ext_dataset, target_folder = cur_folder, verbose = True)
+            cur_usecase.train(dataset, ext_dataset, target_folder = cur_folder, verbose = True)
 

@@ -8,9 +8,9 @@ from six import iteritems
 from functools import total_ordering
 from nilmtk import DataSet
 from datetime import datetime
-from nilmtk import TimeFrameGroup
+from nilmtk import TimeFrameGroup, TimeFrame, MeterGroup
 import matplotlib.pyplot as plt
-
+import pickle as pckl
 
 class DatasetAnalysis(object):
     """ Offers diverse analysis functionality for whole datasets
@@ -341,7 +341,7 @@ class DatasetAnalysis(object):
 
 
             
-    def repair_overall_powerflow(timeframe, verbose = True):
+    def repair_overall_powerflow(self, timeframe, verbose = True):
         ''' Returns a repaired overallpowerflow 
         where missing smart meters are calculated out.
         This function uses the GoodSections and calculates how many of all
@@ -349,7 +349,9 @@ class DatasetAnalysis(object):
         average powerflow per section. Like this deactivated smart meters 
         are averaged out. Of course a basic dataquality is required and all 
         smart meters are expected to have the same average power.
-        
+
+        ! Benutzt invalid meters as basically valid meters
+
         Paramters
         ---------
         timeframe = nilmtk.TimeFrame
@@ -364,8 +366,10 @@ class DatasetAnalysis(object):
 
         ## Get together all meters
         site_meters = MeterGroup()
-        for dataset in datasets:
-            site_meters = site_meters.union(dataset.sitemeters())
+        for i, dataset in enumerate(self.datasets):
+            for building in dataset.buildings:
+                if not dataset.buildings[building].metadata['original_name'] in self.bad_meters:
+                    site_meters = site_meters.union(dataset.buildings[building].elec.sitemeters())
             if verbose:
                 print("Dataset {0} all_elecmeters".format(i))
     
@@ -373,19 +377,26 @@ class DatasetAnalysis(object):
         s = pd.Timestamp("1.1.2016", tz="UTC")
         e = pd.Timestamp("13.3.2017", tz="UTC")
         section = TimeFrameGroup([TimeFrame(start=s, end=e)])
-        total_powerflow = site_meters.power_series_all_data(sample_period=900, sections=section, verbose=True)
-    
+        total_powerflow = pckl.load(open("/media/felix/HDD/6_PowerflowPckls/total_powerflow_new.pckl", "rb"))
+        #total_powerflow = site_meters.power_series_all_data(sample_period=900, sections=section, verbose=True)
+        #pckl.dump(total_powerflow, open("/media/felix/HDD/6_PowerflowPckls/total_powerflow_new.pckl", "wb"))
+
         # Count the missing meters for each point in time
         all_non_null_sections = pd.Series(0, index = pd.DatetimeIndex(start=s, end=e, freq='15min'))
         for i, meter in enumerate(site_meters.meters):
             if verbose:
                 print("Meter {0}".format(i))
-            cur = TimeFrameGroup.calculate_upcounts([site_meters.meters[0].nonzero_sections(sections = section)]).resample('1min').ffill().resample('15min', how='mean')
-            all_non_null_sections += cur.fillna(0)
+            nonzeros = meter.nonzero_sections()
+            if len(nonzeros._df) > 0:
+                cur = TimeFrameGroup.calculate_upcounts([meter.nonzero_sections(sections = section)]).resample('1min').ffill().fillna(0).resample('15min', how='mean')
+                all_non_null_sections = all_non_null_sections.add(cur, fill_value = 0)
     
         # Correct the total powerflow
-        avg_power = total_powerflow / all_non_null_sections
+        avg_power = (total_powerflow / all_non_null_sections).dropna()
         power = avg_power * len(site_meters.meters)
+
+        power = pd.DataFrame(power)
+        power.columns = pd.MultiIndex.from_tuples([('power', 'active')], names=['physical_quantity', 'type'])
         return power
         
     
