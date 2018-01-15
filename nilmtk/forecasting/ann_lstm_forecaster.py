@@ -26,18 +26,6 @@ except ImportError:
     from urllib import urlretrieve
 
 
-global CANCELLED
-
-def add_inputs():
-    global CANCELLED
-    while True:
-        input = sys.stdin.read(1)
-        if 'e' in input:
-            CANCELLED = True
-            print("Manually cancelled!")
-input_thread = threading.Thread(target=add_inputs)
-input_thread.daemon = True
-input_thread.start()
 
 class AnnLstmForecasterModel(Sequence):
     '''
@@ -51,6 +39,7 @@ class AnnLstmForecasterModel(Sequence):
         The scaler used to scale the lstm inputs.
     labelscaler: sklearn.preprocessing.StandardScaler
         The scaler used to scale the labels.
+    epoch: epochs trained so far
 
     Attributes per horizon
     ----------------------
@@ -92,7 +81,7 @@ class AnnLstmForecasterModel(Sequence):
         'size_minibatches': 10,
         
         # How many epochs to train. If set to -1, then a keyinput is awaited to cancel the progress
-        'epochs': 50,
+        'epochs': 10,
 
         # Resolution of one step
         'resolution': '15m',
@@ -151,7 +140,7 @@ class AnnLstmForecasterModel(Sequence):
     }
 
 
-    def __init__(self, path = None, **args):
+    def __init__(self, path = None, args = {}):
         '''
         The paramters are set to the optional paramters handed in by the constructor.
         
@@ -165,6 +154,7 @@ class AnnLstmForecasterModel(Sequence):
         '''
         self.untrained = True
         self.target_folder = None
+        self.epoch = 0
         if not path is None:
             self.target_folder = path
             self.load()
@@ -254,14 +244,27 @@ class AnnLstmForecasterModel(Sequence):
             cur["trainer"].save_checkpoint(folder + str(i) + "/.trainer")
             cur['tensorboard_writer'].flush()
             open(folder + str(i) + "/" + str(self.params['models'][i]) ,"w+").close()
-        all_to_store = []
+
+        # Store the basemodel
+        all_to_store = {}
+        models_to_store = []
         for cur in self:
             to_store = {}
             for cur_to_store in cur:
                 if cur_to_store in ['trainer', 'ann_input', 'lstm_input', 'label', 'model', 'tensorboard_writer']:
                     continue
                 to_store[cur_to_store] = cur[cur_to_store]
-            all_to_store.append(to_store)
+            models_to_store.append(to_store)
+        all_to_store["model"] = models_to_store
+        all_to_store["labelscaler"] = self.labelscaler
+        all_to_store["ann_featurescaler"] = self.ann_featurescaler
+        all_to_store["lstm_featurescaler"] = self.lstm_featurescaler
+        all_to_store["params"] = self.params
+        all_to_store["target_folder"] = self.target_folder
+        all_to_store["untrained"] = self.untrained
+        all_to_store["untrained"] = self.epoch
+
+        pckl.dump(all_to_store, open(folder+ "basemodel", "wb"))
 
         # Store meta information
         tmp = open(folder + "model.txt" ,"w+")
@@ -269,12 +272,9 @@ class AnnLstmForecasterModel(Sequence):
         tmp.write("\n##################\n")
         tmp.write(str(list(list(map(lambda m: m['plotdata'], self)))))
         tmp.close()
-
-        # The rest can be pickled normally 
-        pckl.dump(all_to_store, open(folder+ "basemodel", "wb"))
     
 
-    def load(folder):
+    def load(self):
         ''' Loads the model from the designated folder.
         A folder is given as certain models cannot be stored within a single file.
         
@@ -282,27 +282,35 @@ class AnnLstmForecasterModel(Sequence):
             Folder in which the model can be found
         '''
         # Cancel if folder already exists and contains elements
-
+        folder = self.target_folder
         if not folder.endswith("/"):
             folder += "/"
         if not os.path.isdir(folder):
             raise Exception("The designated folder does not exist.")
 
         # First reload the base model
-        try:
-            model = pckl.load(open(folder+ "basemodel", "rb")) 
-        except:
-            model = AnnLstmForecasterModel()
-        
-        # Store the cntk model and remove (not working yet)
-        for i, cur in enumerate(model):
+        model_data = pckl.load(open(folder+ "basemodel", "rb"))
+        self.model = model_data["model"]
+        self.labelscaler = model_data["labelscaler"]
+        self.lstm_featurescaler = model_data["lstm_featurescaler"]
+        self.ann_featurescaler = model_data["ann_featurescaler"]
+        self.params = model_data["params"]
+        self.target_folder = model_data["target_folder"]
+        self.untrained = model_data["untrained"]
+        if "epoch" in model_data:
+            self.epoch = model_data["epoch"]
+        else:
+            self.epoch = 10
+
+        # Load  the cntk model and remove (not working yet)
+        for i, cur in enumerate(self.model):
             cur['model'] = m = C.load_model(folder + str(i) + '/model.dnn')
-            cur['ann_input'] = cur['model'].arguments[0] #cur['model']['ann_input']
-            cur['lstm_input'] = cur['model'].arguments[1] #cur['model']['lstm_input']
-            cur["label"] = m(cur['model'].arguments[0],cur['model'].arguments[1])
+            cur['ann_input'] = cur['model'].arguments[0]  # cur['model']['ann_input']
+            cur['lstm_input'] = cur['model'].arguments[1]  # cur['model']['lstm_input']
+            cur["label"] = C.input_variable(1, dynamic_axes=m.dynamic_axes, name="y")
+                #m(cur['model'].arguments[0], cur['model'].arguments[1])
             #cur["trainer"].load_checkpoint(folder + str(i) + "/.trainer")
-            #cur["trainer"].restore_from_checkpoint(folder + str(i) + "/.trainer")
-        return model
+            # cur["trainer"].restore_from_checkpoint(folder + str(i) + "/.trainer")
 
 
 
@@ -473,13 +481,13 @@ class AnnLstmForecaster(Forecaster):
         
         if for_forecast:
             ## Nur Temporaer da gleicher Datensatz wie training - Remove later
-            self.model.ann_featurescaler = StandardScaler()
-            self.model.ann_featurescaler.fit(ann_features)    
-            self.model.lstm_featurescaler = StandardScaler()
-            self.model.lstm_featurescaler.fit(lstm_features)
-            self.model.labelscaler = StandardScaler()
-            self.model.labelscaler.fit(chunk[('power','active')].values)
-            ## Ende remove
+            #self.model.ann_featurescaler = StandardScaler()
+            #self.model.ann_featurescaler.fit(ann_features)
+            #self.model.lstm_featurescaler = StandardScaler()
+            #self.model.lstm_featurescaler.fit(lstm_features)
+            #self.model.labelscaler = StandardScaler()
+            #self.model.labelscaler.fit(chunk[('power','active')].values)
+            ### Ende remove
             ann_features = self.model.ann_featurescaler.transform(ann_features)    
             lstm_features = self.model.lstm_featurescaler.transform(lstm_features)   
             return ann_features, lstm_features
@@ -525,7 +533,6 @@ class AnnLstmForecaster(Forecaster):
         if not target_folder.endswith("/"):
             target_folder += "/"
         self.model.target_folder = target_folder
-        self.model.untrained = False
 
         # A) Load the data
         chunk = self._load_data(meters, section)
@@ -535,9 +542,12 @@ class AnnLstmForecaster(Forecaster):
         
         # C) Create the model
         models = self.model.params['models']
+        if self.model.untrained:
+            for modelnumber in range(len(models)):
+                self._model_creation(modelnumber)
         for modelnumber in range(len(models)):
-            self._model_creation(modelnumber)
             self._setup_metric_and_trainer(modelnumber, self.model[modelnumber]['model'], self.model[modelnumber]['label'], target_folder = target_folder)
+
         # D) Arrange the input for LSTM and ANN and labels
         ann_features, lstm_features, labels = self._arrange_features_and_labels(chunk)
 
@@ -549,13 +559,12 @@ class AnnLstmForecaster(Forecaster):
         training_indexes.sort()
 
         # Repeat epochs
-        num_minibatches = len(testing_indexes) // params['size_minibatches']
-        epoch = 0
+        num_minibatches = len(training_indexes) // params['size_minibatches']
         while not CANCELLED:
+            start = time.time()
             # Go through all horizons
             for modelnumber, horizon in enumerate(params['models']):
                 # Do the training for all batches of epoch
-                start = time.time()
                 for i in range(num_minibatches):
                     # Put together the features and labels
                     items = np.random.choice(training_indexes, self.model.params['size_minibatches'])
@@ -569,15 +578,16 @@ class AnnLstmForecaster(Forecaster):
                     model = self.model[modelnumber]
                     model['trainer'].train_minibatch({model['label']: cur_labels, model['lstm_input']: cur_lstm_input, model['ann_input']: cur_ann_input})
                     if i % params['training_progress_output_freq'] == 0:
-                        self._track_training_progress(modelnumber, horizon , epoch * num_minibatches + i, ann_features, lstm_features, labels, testing_indexes, verbose = verbose)
+                        self._track_training_progress(modelnumber, horizon , self.model.epoch * num_minibatches + i, ann_features, lstm_features, labels, testing_indexes, verbose = verbose)
 
             # After each epoch, store the progress
             self.model.store()
-            print("Training took {:.1f} sec".format(time.time() - start))
-                        
-            epoch += 1
-            if (params['epochs'] > 0 and epoch >= params['epochs']):
-                CANCELLED == True
+            print(str(self.model.epoch) +  " Epoch took {:.1f} sec".format(time.time() - start))
+
+            self.model.epoch += 1
+            if (params['epochs'] > 0 and self.model.epoch >= params['epochs']):
+                CANCELLED = True
+            self.model.untrained = False
 
         self.model.store()
         return self.model
@@ -678,7 +688,7 @@ class AnnLstmForecaster(Forecaster):
         cur_ann_input = ann_features[selection]
         cur_labels = list(labels[selection])
 
-        model =  self.model[modelnumber]
+        model = self.model[modelnumber]
         training_loss = model['trainer'].previous_minibatch_loss_average
         eval_error = model['trainer'].test_minibatch({model['label']: cur_labels, model['lstm_input']: cur_lstm_input, model['ann_input']: cur_ann_input})
         eval_error = eval_error * self.model.labelscaler.scale_

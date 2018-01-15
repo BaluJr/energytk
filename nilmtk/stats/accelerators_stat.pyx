@@ -1,3 +1,5 @@
+# distutils: language=c++
+
 import pandas as pd
 DEBUG = False
 import time 

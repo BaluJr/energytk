@@ -211,6 +211,10 @@ class HDFDataStore(DataStore):
         return list(node._v_children.keys())
 
     @doc_inherit
+    def flush(self):
+        self.store.flush()
+
+    @doc_inherit
     def close(self):
         self.store.close()
 
