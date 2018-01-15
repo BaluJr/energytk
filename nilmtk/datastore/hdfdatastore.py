@@ -50,6 +50,7 @@ class HDFDataStore(DataStore):
         if cols is not None:
             cols = [('' if pq is None else pq, '' if ac is None else ac)
                     for pq, ac in cols]
+            cols_idx = pd.MultiIndex.from_tuples(cols, names = ['physical_quantity', 'type'])
 
         if verbose:
             print("HDFDataStore.load(key='{}', cols='{}', sections='{}',"
@@ -64,7 +65,7 @@ class HDFDataStore(DataStore):
             window_intersect = self.window.intersection(section)
 
             if window_intersect.empty: # Wenn der abgefragte Zeitabschnitt nicht in der Datenreihe enthalten ist
-                data = pd.DataFrame()
+                data = pd.DataFrame(columns = cols_idx)
                 data.timeframe = section
                 yield data
                 continue
@@ -74,7 +75,7 @@ class HDFDataStore(DataStore):
                 section_start_i = 0
                 section_end_i = self.store.get_storer(key).nrows
                 if section_end_i <= 1:
-                    data = pd.DataFrame()
+                    data = pd.DataFrame(columns = cols_idx)
                     data.timeframe = section
                     yield data
                     continue
@@ -89,7 +90,7 @@ class HDFDataStore(DataStore):
                         raise
                 n_coords = len(coords)
                 if n_coords == 0:
-                    data = pd.DataFrame()
+                    data = pd.DataFrame(columns = cols_idx)
                     data.timeframe = window_intersect
                     yield data
                     continue
@@ -114,11 +115,13 @@ class HDFDataStore(DataStore):
                     chunk_end_i = section_end_i
                 chunk_end_i += 1
 
-                data = self.store.select(key=key, columns=cols,
+                data = self.store.select(key=key, columns=cols_idx,
                                          start=chunk_start_i, stop=chunk_end_i)
 
-                # if len(data) <= 2:
-                #     yield pd.DataFrame()
+                if len(data) <= 2:
+                    data = pd.DataFrame(columns=cols_idx)
+                    data.timeframe = section
+                    yield data
 
                 # Load look ahead if necessary
                 if n_look_ahead_rows > 0:
