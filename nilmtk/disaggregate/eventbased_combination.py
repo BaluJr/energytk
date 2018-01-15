@@ -435,7 +435,7 @@ def separate_simultaneous_events(transients, steady_states, noise_level):
     transitions = common_transients['active transition']
     abc_same_size = transitions.std(axis=1) < 0.1 * transitions.mean(axis=1)
     if not common_transients.empty and (abc_same_size.sum() / len(common_transients)) > 0.1:
-        raise('There is a three phase appliance, which is not supported yet.')
+        raise Exception('There is a three phase appliance, which is not yet supported.')
                 
     # Find simultaneous events between the pairs of phases
     for a, b in [(0,1),(0,2),(1,2)]:
@@ -1209,6 +1209,9 @@ class EventbasedCombination(UnsupervisedDisaggregator):
         plotting_path: str or False
             If set, a folder where plots are stored
         """
+        if not tmp_folder.endswith("/"):
+            tmp_folder = tmp_folder + "/"
+
         ### Prepare
         pool = Pool(processes=3)
         model = self.model
@@ -1289,13 +1292,15 @@ class EventbasedCombination(UnsupervisedDisaggregator):
 
         # 2. Create separate powerflows with events, shared by multiple phases
         t1 = time.time()
-        if len(model.transients) > 1:
-            model.transients, model.steady_states = \
-                separate_simultaneous_events(model.transients, model.steady_states, model.params['noise_level'])
-        if not tmp_folder is None:
-            pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'wb'))
+        try:
+            self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'rb'))
+        except:
+            if len(model.transients) > 1:
+                model.transients, model.steady_states = \
+                    separate_simultaneous_events(model.transients, model.steady_states, model.params['noise_level'])
+            if not tmp_folder is None:
+                pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'wb'))
         print('Shared phase separation: ' + str(time.time() - t1))
-
 
         ## 3. Separate segments between base load
         try:
@@ -1306,8 +1311,8 @@ class EventbasedCombination(UnsupervisedDisaggregator):
             for i in range(num_phases):
                input_params.append((self.model.transients[i], self.model.steady_states[i],
                                     self.model.params['state_threshold'], self.model.params['noise_level'], self.model.params['binary_spikes']))
-               self.model.transients[i] = add_segments(input_params[-1])
-            #self.model.transients = pool.map(add_segments, input_params)
+               #self.model.transients[i] = add_segments(input_params[-1])
+            self.model.transients = pool.map(add_segments, input_params)
             if plotting_path:
                 nilmtk.plots.latexify(fontsize=11)
                 self.model.steady_states[0]['starts'] = self.model.transients[0]['starts']
@@ -1321,58 +1326,44 @@ class EventbasedCombination(UnsupervisedDisaggregator):
             input_params = []
             for i in range(num_phases):
                input_params.append((model.transients[i], self.model.params['state_threshold'], plotting_path))
-               result.append(find_appliances(input_params[-1]))
-            #result = pool.map(find_appliances, input_params)
+               #result.append(find_appliances(input_params[-1]))
+            result = pool.map(find_appliances, input_params)
             for i in range(num_phases):
                model.transients[i] = result[i]['transients']
                model.clusterer[i] = result[i]['clusterer']
-            print("Find appliances: " + str(time.time() - t2))
             if not tmp_folder is None:
                pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'wb'))
-        ## 4. Create all events which per definition have to belong together (tuned Hart)
-        t2 = time.time()
-        result = []
-        input_params = []
-        for i in range(num_phases):
-           input_params.append((model.transients[i], self.model.params['state_threshold']))
-           #result.append(find_appliances(input_params[-1]))
-        result = pool.map(find_appliances, input_params)
-        for i in range(num_phases):
-           model.transients[i] = result[i]['transients']
-           model.clusterer[i] = result[i]['clusterer']
         print("Find appliances: " + str(time.time() - t2))
-        if not tmp_folder is None:
-           pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'wb'))
 
         # 5. Create the appliances (Pay attention, id per size and subtype) and rest powerflow
-        self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'rb'));
-        model.appliances_detailed = []
-        t3 = time.time()
-        input_params, results = [], []
-        for i in range(num_phases): #len(model.transients)):
-            input_params.append((self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance'], not exact_nilm_datastore is None))
-            #results.append(create_appliances(input_params[-1]))
-        results = pool.map(create_appliances, input_params)
-        for i in range(num_phases):
-           model.appliances.append(results[i]['appliances'])
-           model.overall_powerflow[i] = results[i]['overall_powerflow']
-           if exact_nilm_datastore:
-               model.appliances_detailed.append(results[i]['exact_nilm'])
-        # Then create the multiphase events (has to be done, one after another)
-        for i in range(num_phases, len(model.transients)):
-            result = create_multiphase_appliances((self.model.transients[i], self.model.overall_powerflow, not exact_nilm_datastore is None))
-            model.appliances.append(result['appliances'])
-            model.overall_powerflow = result['overall_powerflow']
-            if exact_nilm_datastore:
-               model.appliances_detailed.append(result['exact_nilm'])
+        try:
+            self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'rb'))
+        except:
+            model.appliances_detailed = []
+            t3 = time.time()
+            input_params, results = [], []
+            for i in range(num_phases): #len(model.transients)):
+                input_params.append((self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance'], not exact_nilm_datastore is None))
+                #results.append(create_appliances(input_params[-1]))
+            results = pool.map(create_appliances, input_params)
+            for i in range(num_phases):
+               model.appliances.append(results[i]['appliances'])
+               model.overall_powerflow[i] = results[i]['overall_powerflow']
+               if exact_nilm_datastore:
+                   model.appliances_detailed.append(results[i]['exact_nilm'])
+            # Then create the multiphase events (has to be done, one after another)
+            for i in range(num_phases, len(model.transients)):
+                result = create_multiphase_appliances((self.model.transients[i], self.model.overall_powerflow, not exact_nilm_datastore is None))
+                model.appliances.append(result['appliances'])
+                model.overall_powerflow = result['overall_powerflow']
+                if exact_nilm_datastore:
+                   model.appliances_detailed.append(result['exact_nilm'])
+            if not tmp_folder is None:
+               pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'wb'))
         print("Put together appliance powerflows: " + str(time.time() - t3))
-        if not tmp_folder is None:
-           pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'wb'))
 
 
         # 5. Store the results (Not in parallel since writing to same file)
-        #if not tmp_folder is None:
-        #    self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'rb'))
         print('Store')
         t4 = time.time()
         for phase in range(len(model.transients)):
