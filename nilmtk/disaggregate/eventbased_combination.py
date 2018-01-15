@@ -167,8 +167,8 @@ def add_segments(params):
     transients.loc[transients['active transition'] < 0, 'spike'] -= transients.loc[transients['active transition'] < 0, 'active transition']
     
     if binary_spikes:
-        transients.loc[transients['active transition'] >= 0, 'spike'] = (transients.loc[transients['active transition'] >= 0, 'spike'] > 0.5).astype(int)
-        transients.loc[transients['active transition'] < 0, 'spike'] = (transients.loc[transients['active transition'] < 0, 'spike'] < 0.5).astype(int)
+        transients.loc[transients['active transition'] >= 0, 'spike'] = (transients.loc[transients['active transition'] >= 0, 'spike'] > 3).astype(int) # 3 Watt is threshhold
+        transients.loc[transients['active transition'] < 0, 'spike'] = (transients.loc[transients['active transition'] < 0, 'spike'] < 3).astype(int)
     #else:
     #    transients.loc[transients['active transition'] >= 0, 'spike'] = transients.loc[transients['active transition'] >= 0, 'spike'].clip(lower=0)
     #    transients.loc[transients['active transition'] < 0, 'spike'] = transients.loc[transients['active transition'] < 0, 'spike'].clip(upper=0)
@@ -177,7 +177,7 @@ def add_segments(params):
 
 
 
-def fast_groupby(df):
+def fast_groupby(df, plotting_path):
     '''
     Does a fast groupby as used for creating the 3-size and 4-size events.
     By unsing numpy it is faster than the pandas version. 
@@ -188,6 +188,8 @@ def fast_groupby(df):
     ----------
     df: pd.DataFrame
         Pandas DataFrame to group
+    plotting_path: str or False
+        The path where the plotting shall take place
 
     Returns
     -------
@@ -209,9 +211,14 @@ def fast_groupby(df):
 
     # Twoevents
     if (index[1] - index[0]) == 2:
-        for arr in np.vsplit(values,index[1:]):
-            result.append(np.array([np.sum(np.abs(arr[:,0]))/2, arr[0,0] + arr[1,0], arr[0,1], arr[1,1], arr[1,2]]))
-        cols = ['transition_avg', 'transition_delta', 'spike_up', 'spike_down', 'duration']
+        if plotting_path:
+            for arr in np.vsplit(values,index[1:]):
+                result.append(np.array([np.sum(np.abs(arr[:,0]))/2, arr[0,1]]))
+            cols = ['transition_avg', 'spike_up']
+        else:
+            for arr in np.vsplit(values,index[1:]):
+                result.append(np.array([np.sum(np.abs(arr[:,0]))/2, arr[0,0] + arr[1,0], arr[0,1], arr[1,1], arr[1,2]]))
+            cols = ['transition_avg', 'transition_delta', 'spike_up', 'spike_down', 'duration']
     # Threeevents
     elif (index[1] - index[0]) == 3:
         for arr in np.vsplit(values,index[1:]):
@@ -227,7 +234,7 @@ def fast_groupby(df):
 
 
 
-def fast_groupby_with_additional_grpfield(df):
+def fast_groupby_with_additional_grpfield(df, plotting_path):
     '''
     Special version of the fast groupby, that is used for creating the 2-size events from the 
     4 size events. In this case the additional group-field has to be incorporated into the grouping.
@@ -239,6 +246,8 @@ def fast_groupby_with_additional_grpfield(df):
     ----------
     df : pd.DataFrame
         Pandas DataFrame to group
+    plotting_path: str or False
+        The path where the plotting shall take place
 
     Returns
     -------
@@ -254,9 +263,14 @@ def fast_groupby_with_additional_grpfield(df):
     result = []
     
     # This version only supports twoevents    
-    for arr in np.vsplit(values,index[1:]):
-        result.append(np.array([np.sum(np.abs(arr[:,0]))/2, arr[0,0] + arr[1,0], arr[0,1], arr[1,1], arr[1,2]])) # arr[:,2]]))#, arr[1:,3]]))
-    cols = ['transition_avg', 'transition_delta', 'spike_up', 'spike_down', 'duration']
+    if plotting_path:
+        for arr in np.vsplit(values,index[1:]):
+            result.append(np.array([np.sum(np.abs(arr[:,0]))/2, arr[0,1]]))
+        cols = ['transition_avg', 'spike_up']
+    else:
+        for arr in np.vsplit(values,index[1:]):
+            result.append(np.array([np.sum(np.abs(arr[:,0]))/2, arr[0,0] + arr[1,0], arr[0,1], arr[1,1], arr[1,2]]))
+        cols = ['transition_avg', 'transition_delta', 'spike_up', 'spike_down', 'duration']
     idx = pd.MultiIndex.from_arrays([df.loc[::2,'segment'],df.loc[::2,'grp'].values])
     df2 = pd.DataFrame(index = idx, data = result, columns=cols)
     return df2
@@ -549,7 +563,9 @@ def find_appliances(params):
         The transients which are processed and clustered to assign them to appliances
     state_threshold: float
         The threshhold earlier used for extracting the segments.
-    
+    plotting_path: str or False
+        If and where to store plots
+
     Returns
     -------
     transients: pd.DataFrame
@@ -562,12 +578,16 @@ def find_appliances(params):
         Dictionary which contains for each subtype the corresponding GaussianMixture
         used during clustering.
     '''
-    transients, state_threshold = params
+    try:
+        transients, state_threshold, plotting_path = params
+    except:
+        transients, state_threshold = params
+        plotting_path = False
     clusterers = {}
     
     # Separate the two-flag events 
     twoevents = transients[transients['segmentsize'] == 2]
-    twoevents = fast_groupby(twoevents)
+    twoevents = fast_groupby(twoevents, plotting_path = plotting_path)
     new_clusterers, subtypes, labels, confidences = \
         _gmm_clustering_hierarchical(twoevents, "2", max_num_clusters = [6, 4], dim_scaling = {'transition_avg':3},
                                      check_for_variance_dims=['transition_avg'], single_only=True)
@@ -575,7 +595,10 @@ def find_appliances(params):
     twoevents['confident'] = confidences
     twoevents['appliance'] = labels
     twoevents['subtype'] = subtypes
-    #nilmtk.plots.plot_clustering(clusterers, twoevents, ["transition_avg", "spike_up"], s=0.1)
+    if plotting_path:
+        nilmtk.plots.latexify(fontsize=11)
+        nilmtk.plots.plot_clustering(clusterers, twoevents, ["transition_avg", "spike_up"], s=0.1)
+        plt.savefig(plotting_path + "\segmentation_clusterer.png")
     transients = transients.join(twoevents[['appliance', 'confident', 'subtype']], on="segment")
     transients['appliance'] = transients['appliance'].fillna(-1)
     transients['confident'] = transients['confident'].fillna(0).astype(bool)
@@ -584,7 +607,7 @@ def find_appliances(params):
 
     ## Separate the three-flag events
     threeevents = transients[transients['segmentsize'] == 3]
-    threeevents = fast_groupby(threeevents)
+    threeevents = fast_groupby(threeevents, plotting_path)
     threeevents['subtype'] = (threeevents['sec'] < 0).astype(int)
     threeevents['appliance'] = -1
     threeevents['confident'] = False
@@ -609,7 +632,7 @@ def find_appliances(params):
     allfourevents = transients[transients['segmentsize']==4]
 
     ## First look, whether just overlapping or sequential twoevents
-    fourevents = fast_groupby(allfourevents)
+    fourevents = fast_groupby(allfourevents, plotting_path)
     overlapping = (fourevents['fst']>0) & (fourevents['sec']>0) & (fourevents['trd']<0) & (fourevents['fth']<0)  
     d1 = (fourevents['fst'] + fourevents['trd']).abs() + (fourevents['sec'] + fourevents['fth']).abs()
     d2 = (fourevents['fst'] + fourevents['fth']).abs() + (fourevents['sec'] + fourevents['trd']).abs()
@@ -627,7 +650,7 @@ def find_appliances(params):
     flank['grp'] = np.array([0,0,1,1]*(len(flank)//4)) + np.outer(range(len(flank)//4),np.array([2,2,2,2])).flatten()
     allflank = allflank.append(flank)
 
-    possible_twoevents = fast_groupby_with_additional_grpfield(allflank)
+    possible_twoevents = fast_groupby_with_additional_grpfield(allflank, plotting_path)
     labels, confidence, subtypes =  _gmm_hierarchical_predict_and_confidence_check("2", possible_twoevents, clusterers, ['transition_avg'])
     possible_twoevents['confident'] = confidence
     possible_twoevents['appliance'] = labels
@@ -1167,7 +1190,7 @@ class EventbasedCombination(UnsupervisedDisaggregator):
 
 
 
-    def disaggregate(self, metergroup, output_datastore, exact_nilm_datastore = None, tmp_folder = None, **kwargs):
+    def disaggregate(self, metergroup, output_datastore, exact_nilm_datastore = None, tmp_folder = None, plotting_path = False, **kwargs):
         """ Trains and immediatly disaggregates
 
         Parameters
@@ -1183,6 +1206,8 @@ class EventbasedCombination(UnsupervisedDisaggregator):
         tmp_folder: str
             Path to a folder where intermediate results shall be stored.
             It let none, no intermediate results are stored
+        plotting_path: str or False
+            If set, a folder where plots are stored
         """
         ### Prepare
         pool = Pool(processes=3)
@@ -1226,9 +1251,11 @@ class EventbasedCombination(UnsupervisedDisaggregator):
                     loader.append(metergroup.meters[i].load(cols=self.model.params['cols'], chunksize = 31000000, **kwargs))
                 try:
                     while(True):
+                        print("Loaded one more")
                         input_params = []
                         states_and_transients = []
                         for i in range(num_phases):
+                            print("Loaded " + str(i))
                             power_dataframe = next(loader[i]).dropna()
                             if overall_powerflow[i] is None:
                                 overall_powerflow[i] = power_dataframe.resample('5min').agg('mean')
@@ -1239,8 +1266,8 @@ class EventbasedCombination(UnsupervisedDisaggregator):
                             values = np.array(power_dataframe.iloc[:,0])
                             input_params.append((indices, values, model.params['min_n_samples'],
                                                 model.params['state_threshold'], model.params['noise_level']))
-                            #states_and_transients.append(find_transients_fast(input_params[-1]))
-                        states_and_transients = pool.map(find_transients_fast, input_params)
+                            states_and_transients.append(find_transients_fast(input_params[-1]))
+                        #states_and_transients = pool.map(find_transients_fast, input_params)
                         for i in range(len(metergroup)):
                             steady_states_list[i].append(states_and_transients[i][0])
                             transients_list[i].append(states_and_transients[i][1])
@@ -1271,21 +1298,37 @@ class EventbasedCombination(UnsupervisedDisaggregator):
 
 
         ## 3. Separate segments between base load
-        #if not tmp_folder is None:
-        #    self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'rb'))
-        for i in range(num_phases,len(model.steady_states)):
-            model.steady_states[i] = pd.DataFrame(model.steady_states[i]).rename(columns={'active transition':'active average'})
-        t1 = time.time()
-        input_params = []
-        for i in range(num_phases):
-           input_params.append((self.model.transients[i], self.model.steady_states[i],
-                                self.model.params['state_threshold'], self.model.params['noise_level'], self.model.params['binary_spikes']))
-           #self.model.transients[i] = add_segments(input_params[-1])
-        self.model.transients = pool.map(add_segments, input_params)
-        #nilmtk.plots.plot_segments(self.model.transients[0][:1000], self.model.steady_states[0][:1000])
-        print('Segment separation: ' + str(time.time() - t1))
-        
+        try:
+            self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'rb'))
+        except:
+            t1 = time.time()
+            input_params = []
+            for i in range(num_phases):
+               input_params.append((self.model.transients[i], self.model.steady_states[i],
+                                    self.model.params['state_threshold'], self.model.params['noise_level'], self.model.params['binary_spikes']))
+               self.model.transients[i] = add_segments(input_params[-1])
+            #self.model.transients = pool.map(add_segments, input_params)
+            if plotting_path:
+                nilmtk.plots.latexify(fontsize=11)
+                self.model.steady_states[0]['starts'] = self.model.transients[0]['starts']
+                nilmtk.plots.plot_segments(self.model.transients[0].set_index('starts')[pd.Timestamp("1970-01-02 12:00"):pd.Timestamp("1970-01-02 18:00")].reset_index(), self.model.steady_states[0][pd.Timestamp("1970-01-02 12:00"):pd.Timestamp("1970-01-02 18:00")])
+                plt.savefig(plotting_path + "\segmentation_segments.png")
+            print('Segment separation: ' + str(time.time() - t1))
 
+            ## 4. Create all events which per definition have to belong together (tuned Hart)
+            t2 = time.time()
+            result = []
+            input_params = []
+            for i in range(num_phases):
+               input_params.append((model.transients[i], self.model.params['state_threshold'], plotting_path))
+               result.append(find_appliances(input_params[-1]))
+            #result = pool.map(find_appliances, input_params)
+            for i in range(num_phases):
+               model.transients[i] = result[i]['transients']
+               model.clusterer[i] = result[i]['clusterer']
+            print("Find appliances: " + str(time.time() - t2))
+            if not tmp_folder is None:
+               pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'wb'))
         ## 4. Create all events which per definition have to belong together (tuned Hart)
         t2 = time.time()
         result = []
@@ -1302,7 +1345,7 @@ class EventbasedCombination(UnsupervisedDisaggregator):
            pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'wb'))
 
         # 5. Create the appliances (Pay attention, id per size and subtype) and rest powerflow
-        self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'rb')); 
+        self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'rb'));
         model.appliances_detailed = []
         t3 = time.time()
         input_params, results = [], []
@@ -1320,7 +1363,7 @@ class EventbasedCombination(UnsupervisedDisaggregator):
             result = create_multiphase_appliances((self.model.transients[i], self.model.overall_powerflow, not exact_nilm_datastore is None))
             model.appliances.append(result['appliances'])
             model.overall_powerflow = result['overall_powerflow']
-            if exact_nilm_datastore:    
+            if exact_nilm_datastore:
                model.appliances_detailed.append(result['exact_nilm'])
         print("Put together appliance powerflows: " + str(time.time() - t3))
         if not tmp_folder is None:

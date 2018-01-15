@@ -124,9 +124,11 @@ class DatasetAnalysis(object):
             Sometimes somehow errors appear. With activated repair
             the script retries the process for these steps.
         merge_shorter_gaps_then: pd.Timedelta
-            Merge sections which are separated by a gap smaller then this timedelta
+            Merge sections which are separated by a gap smaller then this timedelta.
+            Given as timedelta string.
         remove_shorter_then: pd.Timedelta
             Remove sections which are smaller then this timedelta
+            Given as timedelta string.
         """
 
         # Dictionaries to fill should be the ones of the object
@@ -257,7 +259,7 @@ class DatasetAnalysis(object):
 
 
 
-    def create_overviewplot_sections(self, buildings = None, nonzero_instead_good = False, verbose = True):
+    def create_overviewplot_sections(self, buildings = None, nonzero_instead_good = False, invert = False, verbose = True):
         """
         Creates an overview plot of all good sections in one figure.
         If nothing else specified does this for all meters.
@@ -268,6 +270,8 @@ class DatasetAnalysis(object):
             The buildings which shall be plotted
         nonzero_instead_good: bool
             If kept false good sections are plotted. Else nonzero sections are plotted.
+        invert: bool
+            Whether the invalid instead the valid sections shall be plotted.
         verbose: bool
             Whether to output additional information.
 
@@ -282,14 +286,16 @@ class DatasetAnalysis(object):
             sections = list(map(sections, buildings))
 
         n = len(self.goodsections)
-        fig = plt.figure(figsize=(50, 50)) #, tight_layout=True)
+        fig = plt.figure(figsize=(100, 50), tight_layout=True)
         for i in range(n):
             if verbose:
                 print("Plot {0}/{1}".format(str(i),str(n)))
 
             ax = fig.add_subplot(n, 1, i + 1)
-            sections.plot_simple(ax=ax) #self.nonzerosections[i][0]
-            ax.set_xlim([self.timeframe.start, self.timeframe.end])
+            if invert:
+                sections[i] = sections[i].invert(self.timeframe.start, self.timeframe.end)
+            sections[i].plot_simple(ax=ax) #self.nonzerosections[i][0]
+            ax.set_xlim([self.timeframe.start.to_datetime(), self.timeframe.end.to_datetime()])
 
             if i != 0:
                 plt.setp(ax.get_xticklabels(), visible=False)

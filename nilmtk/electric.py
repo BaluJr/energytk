@@ -209,7 +209,8 @@ class Electric(MeterSeries):
             return ax
 
         load_kwargs['sections'] = [timeframe]
-        load_kwargs = self._set_sample_period(timeframe, **load_kwargs)
+        if not 'sample_period' in load_kwargs:
+            load_kwargs = self._set_sample_period(timeframe, **load_kwargs)
         power_series = self.power_series_all_data(**load_kwargs)
         if power_series is None or power_series.empty:
             return ax
@@ -850,7 +851,7 @@ def align_two_meters(master, slave, func='power_series', sample_period = None):
         sample_period = master.sample_period()
 
     period_alias = '{:d}S'.format(sample_period)
-    sections = master.good_sections()
+    sections = master.good_sections().merge_shorter_gaps_than(sample_period) # I have included the merge to be capable to measure ECO Dataset
     master_generator = getattr(master, func)(sections=sections, sample_period = sample_period)
     for master_chunk in master_generator:
         if len(master_chunk) < 2:
