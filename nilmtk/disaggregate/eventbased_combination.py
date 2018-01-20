@@ -177,7 +177,7 @@ def add_segments(params):
 
 
 
-def fast_groupby(df, plotting_path):
+def fast_groupby(df, plotting_path, segsize):
     '''
     Does a fast groupby as used for creating the 3-size and 4-size events.
     By unsing numpy it is faster than the pandas version. 
@@ -190,12 +190,27 @@ def fast_groupby(df, plotting_path):
         Pandas DataFrame to group
     plotting_path: str or False
         The path where the plotting shall take place
+    segsize: The segmentsize which is targeted
 
     Returns
     -------
     df: pd.DataFrame.  T
         The grouped dataframe, which can then used as an input for the clustering.
     '''
+    
+    if len(df) < 4:
+        if segsize == 2:
+            if plotting_path:
+                return pd.DataFrame( columns=['transition_avg', 'spike_up'])
+            else:
+                return pd.DataFrame(columns=['transition_avg', 'transition_delta', 'spike_up', 'spike_down', 'duration'])
+        elif segsize == 3:
+            return pd.DataFrame(columns=['fst', 'sec', 'trd', 'fst_spike', 'sec_spike', 'trd_spike', ])
+        else:
+            return pd.DataFrame(columns=['fst', 'sec', 'trd', 'fth', 'fst_spike', 'sec_spike', 'trd_spike', 'fth_spike', 'fst_duration', 'sec_duration', 'trd_duration'])
+
+        print("few elements to group")
+
 
     df = df[['segment', 'active transition', 'starts', 'ends', 'spike']]
     df = df.sort_values(['segment','starts'])
@@ -206,11 +221,8 @@ def fast_groupby(df, plotting_path):
     ukeys,index=np.unique(keys, return_index = True) 
     result = []
 
-    if len(df) < 4:
-        raise Exception("Broken")
-
     # Twoevents
-    if (index[1] - index[0]) == 2:
+    if segsize == 2:
         if plotting_path:
             for arr in np.vsplit(values,index[1:]):
                 result.append(np.array([np.sum(np.abs(arr[:,0]))/2, arr[0,1]]))
@@ -220,7 +232,7 @@ def fast_groupby(df, plotting_path):
                 result.append(np.array([np.sum(np.abs(arr[:,0]))/2, arr[0,0] + arr[1,0], arr[0,1], arr[1,1], arr[1,2]]))
             cols = ['transition_avg', 'transition_delta', 'spike_up', 'spike_down', 'duration']
     # Threeevents
-    elif (index[1] - index[0]) == 3:
+    elif segsize == 3:
         for arr in np.vsplit(values,index[1:]):
             result.append(np.concatenate([arr[:,0], arr[:,1]]))#, arr[:,2]]))#, arr[1:,3]]))
         cols = ['fst', 'sec', 'trd', 'fst_spike', 'sec_spike', 'trd_spike', ]  #, 'fst_length', 'sec_length', 'trd_length']#, 'fst_duration', 'sec_duration']
@@ -587,7 +599,7 @@ def find_appliances(params):
     
     # Separate the two-flag events 
     twoevents = transients[transients['segmentsize'] == 2]
-    twoevents = fast_groupby(twoevents, plotting_path = plotting_path)
+    twoevents = fast_groupby(twoevents, plotting_path, 2)
     new_clusterers, subtypes, labels, confidences = \
         _gmm_clustering_hierarchical(twoevents, "2", max_num_clusters = [6, 4], dim_scaling = {'transition_avg':3},
                                      check_for_variance_dims=['transition_avg'], single_only=True)
@@ -607,7 +619,7 @@ def find_appliances(params):
 
     ## Separate the three-flag events
     threeevents = transients[transients['segmentsize'] == 3]
-    threeevents = fast_groupby(threeevents, plotting_path)
+    threeevents = fast_groupby(threeevents, plotting_path, 3)
     threeevents['subtype'] = (threeevents['sec'] < 0).astype(int)
     threeevents['appliance'] = -1
     threeevents['confident'] = False
@@ -632,7 +644,7 @@ def find_appliances(params):
     allfourevents = transients[transients['segmentsize']==4]
 
     ## First look, whether just overlapping or sequential twoevents
-    fourevents = fast_groupby(allfourevents, plotting_path)
+    fourevents = fast_groupby(allfourevents, plotting_path, 4)
     overlapping = (fourevents['fst']>0) & (fourevents['sec']>0) & (fourevents['trd']<0) & (fourevents['fth']<0)  
     d1 = (fourevents['fst'] + fourevents['trd']).abs() + (fourevents['sec'] + fourevents['fth']).abs()
     d2 = (fourevents['fst'] + fourevents['fth']).abs() + (fourevents['sec'] + fourevents['trd']).abs()
@@ -1209,7 +1221,7 @@ class EventbasedCombination(UnsupervisedDisaggregator):
         plotting_path: str or False
             If set, a folder where plots are stored
         """
-        if not tmp_folder.endswith("/"):
+        if not tmp_folder is None and not tmp_folder.endswith("/"):
             tmp_folder = tmp_folder + "/"
 
         ### Prepare
@@ -1301,7 +1313,7 @@ class EventbasedCombination(UnsupervisedDisaggregator):
             if not tmp_folder is None:
                 pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'wb'))
         print('Shared phase separation: ' + str(time.time() - t1))
-
+        
         ## 3. Separate segments between base load
         try:
             self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'rb'))
@@ -1311,8 +1323,8 @@ class EventbasedCombination(UnsupervisedDisaggregator):
             for i in range(num_phases):
                input_params.append((self.model.transients[i], self.model.steady_states[i],
                                     self.model.params['state_threshold'], self.model.params['noise_level'], self.model.params['binary_spikes']))
-               #self.model.transients[i] = add_segments(input_params[-1])
-            self.model.transients = pool.map(add_segments, input_params)
+               self.model.transients[i] = add_segments(input_params[-1])
+            #self.model.transients = pool.map(add_segments, input_params)
             if plotting_path:
                 nilmtk.plots.latexify(fontsize=11)
                 self.model.steady_states[0]['starts'] = self.model.transients[0]['starts']
@@ -1326,8 +1338,8 @@ class EventbasedCombination(UnsupervisedDisaggregator):
             input_params = []
             for i in range(num_phases):
                input_params.append((model.transients[i], self.model.params['state_threshold'], plotting_path))
-               #result.append(find_appliances(input_params[-1]))
-            result = pool.map(find_appliances, input_params)
+               result.append(find_appliances(input_params[-1]))
+            #result = pool.map(find_appliances, input_params)
             for i in range(num_phases):
                model.transients[i] = result[i]['transients']
                model.clusterer[i] = result[i]['clusterer']
