@@ -26,7 +26,7 @@ class Appliance(Hashable):
 
     #: Static variable.  Controls whether Appliance.matches() allows synonyms
     #: for appliance type names.
-    allow_synonyms = True
+    allow_synonyms = False
 
     def __init__(self, metadata=None):
         self.metadata = {} if metadata is None else metadata

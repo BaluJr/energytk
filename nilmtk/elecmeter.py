@@ -381,6 +381,13 @@ class ElecMeter(Hashable, Electric):
 
         match = True
         for k, v in iteritems(key):
+            if k == "identifier":
+                if self.identifier == v:
+                    break 
+                else:
+                    match = False
+                    break
+
             if hasattr(self.identifier, k):
                 if getattr(self.identifier, k) != v:
                     match = False
@@ -897,7 +904,7 @@ class ElecMeter(Hashable, Electric):
             try:
                 #self.store.remove(key_for_cached_stat)
                 self.store.put(key_for_cached_stat, stat_for_store, fixed = True)
-                # Temporary workarround to store the good sections also for the other meters
+                # Temporary workarround to store the good sections also for the other meters TODO
                 if results_obj.name == 'good_sections':
                     for i in range(2,4):
                         self.store.put(key_for_cached_stat.replace('meter1', 'meter' +str(i)), stat_for_store, fixed = True) 

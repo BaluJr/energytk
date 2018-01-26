@@ -109,7 +109,7 @@ def percetage_of_assigned_energy(pred_meter, ground_truth_meter, etype = ("power
     #sections = pred_meter.good_sections().intersection(ground_truth_meter.good_sections())
     ground_truth_energy = ground_truth_meter.total_energy()#sections=sections)
     predicted_energy = pred_meter.total_energy()#sections=sections)
-    return ground_truth_energy / predicted_energy
+    return predicted_energy / ground_truth_energy
 
 
 def deviation_of_assigned_energy(pred_meter, ground_truth_meter, etype = ("power","active")):
@@ -179,7 +179,7 @@ def rms_error_power(pred_meter, ground_truth_meter, etype = ("power","active")):
 
 
 
-def mae(pred_meter, ground_truth_meter, etype = ("power","active")):
+def mean_average_error(pred_meter, ground_truth_meter, etype = ("power","active")):
     ''' E) This function calculates the mean average error    Parameters
 
     Parameters
@@ -282,7 +282,7 @@ def precision(pred_meter, ground_truth_meter, etype = ("power","active")):
     selected_elements = pred_meter.uptime()
     if selected_elements.total_seconds() > 0:
         return true_positives / selected_elements
-    else:
+    else:   
         return float('nan')
 
 
@@ -352,12 +352,13 @@ def f1_score(pred_meter, ground_truth_meter, etype = ("power","active")):
     selected_elements = pred_meter.uptime()
 
     precision = true_positives / relevant_elements
-    recall = true_positives / relevant_elements
-
-    if (precision + recall) > 0:
-        return (2 * precision * recall / (precision + recall))
-    else:
+    if selected_elements.total_seconds() == 0:
         return float('nan')
+    recall = true_positives / selected_elements
+
+    if (precision + recall) <= 0:
+        return float('nan')
+    return (2 * precision * recall / (precision + recall))
 
 
 
@@ -447,7 +448,7 @@ def mcc(pred_meter, ground_truth_meter, good_sections = None, etype = ("power","
     if not type(ground_truth_meter) is TimeFrameGroup:
         ground_truth_meter = ground_truth_meter.overbasepower_sections()
 
-    TP, TN, FP, FN = pred_meter.get_TP_TN_FP_FN(ground_truth_meter)
+    TP, TN, FP, FN = pred_meter.get_TP_TN_FP_FN(ground_truth_meter, good_sections)
     TP, TN = TP.uptime().total_seconds(), TN.uptime().total_seconds()
     FP, FN = FP.uptime().total_seconds(), FN .uptime().total_seconds()
 
@@ -529,7 +530,7 @@ def _pre_matching(prediction, ground_truth, metric = "MCC", plotting_path = Fals
         plots.latexify(fontsize=11)
         plots.plot_evaluation_assignments(gt_abovebaseload_sec, pred_abovebaseload_sec, assignments, ground_truth,
                                         TimeFrame(timeframe.start, timeframe.start + pd.Timedelta("2d")))
-        plt.savefig(plotting_path + "\matching_plot.png")
+        plt.savefig(plotting_path + "\matching_plot.pdf")
 
     assigned_metegroups = []
     for assignment in assignments:
@@ -618,7 +619,7 @@ metrics_dictionary = {
     'D_RMSE':
         {'lbl': "RMSE", 'fn': rms_error_power, 'better':-1, "usecase":["all", "one"]},
     'E_MAE':
-        {'lbl': "MAE", 'fn': mae, 'better':-1, "usecase":["all", "one"]},
+        {'lbl': "MAE", 'fn': mean_average_error, 'better':-1, "usecase":["all", "one"]},
     'F_MNE':
         {'lbl': "Mean Normalized Error", 'fn': mean_normalized_error_power, 'better':-1, "usecase":["all", "one"]},
 
@@ -980,7 +981,7 @@ def calc_errors_forecasting(forecasts, original_load, metrics, null_handling = '
 
 ###################################
 # Clustering metrics
-def calc_errors_correlations(orig_corrs, disag_corrs, cluster_corrs, metrics):
+def calc_errors_correlations(orig_corrs, disag_corrs, cluster_corrs, overall_corr):
     '''
     This is the main function calculating error metrics for 
     correlation. It calculated the average maximum correlation
@@ -993,8 +994,8 @@ def calc_errors_correlations(orig_corrs, disag_corrs, cluster_corrs, metrics):
         The metergroup of disaggregations
     cluster_corrs:
         The created clustering
-    metrics:
-        The metrics used to 
+    overall_corr:
+        The correlation of the overall summed powerflow
 
     Results
     -------

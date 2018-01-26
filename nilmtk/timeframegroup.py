@@ -248,13 +248,17 @@ class TimeFrameGroup():
         return TimeFrameGroup(result).simplify()
 
 
-    def get_TP_TN_FP_FN(self, ground_truth):
+    def get_TP_TN_FP_FN(self, ground_truth, good_sections):
         ''' Returns all the basic descriptors of binary classifier.
 
         Paramters
         ---------
         ground_truth: TimeFrameGroup
             The ground truth this timeframegroup is compared with.
+        good_sections: TimeFrameGroup
+            This is necessary to also detect the false values at the 
+            borders because they get lost as we only hand in the 
+            overbaseload sections. (TODO: Standardize this)
 
         Returns
         -------
@@ -273,8 +277,15 @@ class TimeFrameGroup():
             all_events = all_events.append(pd.Series(1*i, index=pd.DatetimeIndex(cur._df['section_start'])))
             all_events = all_events.append(pd.Series(-1*i, index=pd.DatetimeIndex(cur._df['section_end'])))
         all_events.sort_index(inplace=True)
-        all_events_sum = all_events.cumsum()
+        # Take care that regions in the end not forgotten
+        all_events = all_events.groupby(all_events.index).sum()
+        if all_events.index[-1] != good_sections.get_timeframe().end:
+            all_events[good_sections.get_timeframe().end] = 0
+        if all_events.index[0] != good_sections.get_timeframe().start:
+            all_events[good_sections.get_timeframe().start] = 0
+        all_events.sort_index(inplace=True)
 
+        all_events_sum = all_events.cumsum()
         TP = (all_events_sum == 3) # both on
         TN = (all_events_sum == 0) # both off
         FP = (all_events_sum == 1) # gt == 0 but self == 1
@@ -285,15 +296,15 @@ class TimeFrameGroup():
         for cur in [TP, TN, FP, FN]:
             starts = all_events.index[cur]#[:-1]
             ends = cur.shift(1)
-            if len(ends > 0):
-                ends[0] = False
+            #if len(ends) > 0:
+            ends = ends.fillna(False)
             ends = all_events[ends].index
 
             if len(starts) == 0 or len(ends) == 0:
                 results.append(TimeFrameGroup())
                 continue
 
-            if starts[-1] > ends[-1]:
+            if starts[-1] >= ends[-1]:
                 starts = starts[:-1]
             result = pd.DataFrame({'section_start': starts, 'section_end':ends})
             results.append(TimeFrameGroup(result).simplify())

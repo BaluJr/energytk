@@ -319,7 +319,7 @@ class MeterGroup(Electric):
                 return True
         return False
 
-    def select(self, elecmeters_only = False, **select_kwargs):
+    def select(self, **select_kwargs): #elecmeters_only = False,
         """Select a group of meters based on meter metadata.
 
         e.g.
@@ -384,8 +384,9 @@ class MeterGroup(Electric):
             exception = None
             no_match = True
             
-            if elecmeters_only:
+            if 'elecmeters_only' in select_kwarg and select_kwarg['elecmeters_only']:
                 meters = self.all_elecmeters()
+                select_kwarg.pop('elecmeters_only')
             else:
                 meters = self.meters
             for meter in meters:
@@ -404,8 +405,8 @@ class MeterGroup(Electric):
                 raise exception
 
         if len(select_kwargs) == 1 and isinstance(list(select_kwargs.values())[0], list):
-            attribute = select_kwargs.keys()[0]
-            list_of_values = select_kwargs.values()[0]
+            attribute = list(select_kwargs.keys())[0]
+            list_of_values = list(select_kwargs.values())[0]
             for value in list_of_values:
                 get({attribute: value})
         else:
@@ -429,7 +430,7 @@ class MeterGroup(Electric):
         -------
         new MeterGroup of selected meters.
         """
-        select_kwargs['func':'matches_appliances']
+        select_kwargs['func'] = 'matches_appliances'
         return self.select(**select_kwargs)
     
     #endregion
@@ -739,8 +740,8 @@ class MeterGroup(Electric):
         # Handle kwargs
         if self.sample_period() == 0:
             load_kwargs["high_res"] = True
-            if not 'sample_period' in load_kwargs:
-                load_kwargs.setdefault('sample_period', 1)
+            #if not 'sample_period' in load_kwargs:
+        load_kwargs.setdefault('sample_period', 1)
         sample_period = load_kwargs['sample_period']
         #sample_period = load_kwargs.setdefault('sample_period', self.sample_period())
 
@@ -765,8 +766,8 @@ class MeterGroup(Electric):
         for section in split_timeframes(sections, duration_threshold):
             load_kwargs['sections'] = [section]
             start = normalise_timestamp(section.start, freq)
-            tz = None if start.tz is None else start.tz.zone
-            #tz = self.get_timeframe().start.tz
+            tz = None if start.tz is None else start.tz.zone 
+            #tz = self.get_timeframe().start.tz                      # WIEDER EINKOMMENTIERT!!!
             index = pd.date_range(
                 start, section.end, tz=tz,
                 closed='left', freq=freq)
@@ -1019,7 +1020,7 @@ class MeterGroup(Electric):
 
         """
         if self.meters:
-            abovebaseload_sections = [TimeFrameGroup([self.get_timeframe()])]
+            abovebaseload_sections = []#TimeFrameGroup([self.get_timeframe()])] TODO: Why was it like this?
             for meter in self.meters:
                 abovebaseload_sections.append(meter.overbasepower_sections())
             abovebaseload_sections = TimeFrameGroup.union_many(abovebaseload_sections)
