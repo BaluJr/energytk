@@ -59,7 +59,7 @@ class OverBasepowerSectionsResults(Results):
         ends = pd.concat(ends)
         
         rate = pd.Timedelta(seconds=self.max_sample_rate)
-        self._data = TimeFrameGroup(starts_and_ends={'starts': starts, 'ends': ends}).merge_shorter_gaps_than(rate)
+        self._data = TimeFrameGroup(starts_and_ends={'starts': starts, 'ends': ends})#.merge_shorter_gaps_than(rate) TODO: Merge needed?
 
 
     def unify(self, other):

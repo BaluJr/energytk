@@ -17,7 +17,7 @@ import seaborn as sns
 from nilmtk import TimeFrameGroup
 import itertools
 from nilmtk import TimeFrameGroup, TimeFrame
-
+import matplotlib.dates as mdates
 
 #############################################################
 #region Nilm Plotting
@@ -38,7 +38,7 @@ def plot_overall_power_vs_disaggregation(main_meter, disaggregations, verbose = 
     """
 
     # Create the main figure
-    fig = plt.figure()#, tight_layout=True)
+    fig = plt.figure()  #, tight_layout=True)
 
     # Create one bigger subplot for the overall power
     timeframe = disaggregations.get_timeframe(intersection_instead_union = False)
@@ -59,10 +59,12 @@ def plot_overall_power_vs_disaggregation(main_meter, disaggregations, verbose = 
         if verbose:
             print(str(i) + "/" + str(n))
         sub_ax = fig.add_subplot(sections, 1, size_main_figure+i+1)
-        dis.plot(sub_ax,timeframe=timeframe, plot_legend = False, sample_period = 2)
+        dis.plot(sub_ax,timeframe=timeframe, legend = False, sample_period = 2)
         ax.get_shared_x_axes().join(ax, sub_ax)
         ax.get_shared_y_axes().join(ax, sub_ax)
         sub_ax.set_ylim(ax.get_ylim())
+        if i != 2:
+            ax.set_ylabel("")
         #sub_ax.set_xlim([timeframe.start, timeframe.end])
 
     # Link the axis
@@ -141,6 +143,7 @@ def plot_stackplot(disaggregations, total_power = None, stacked = True, verbose 
         all[name] = dis.power_series_all_data(sections=[timeframe], sample_period=2)
     all = all.fillna(0)
     all.plot.area(ax = ax, stacked = stacked)
+    ax.set_xscale("log", nonposx='clip')
     ax.set_xlim([timeframe.start, timeframe.end])
     return fig
 
@@ -168,7 +171,7 @@ def plot_segments(transitions, steady_states, ax = None):
     ax = fig.add_subplot(111)
     if ax is None:
         ax = plt.gca()
-    ax.xaxis.axis_date()
+    #ax.xaxis.axis_date()
 
     # Sort segments to always plot lower segment on top
     steady_states['segment'] = transitions.set_index('starts')['segment']
@@ -181,7 +184,10 @@ def plot_segments(transitions, steady_states, ax = None):
     for cur in firsts:
         rows = steady_states[steady_states['segment'] == cur]
         ax.fill_between(rows.index.to_pydatetime(), rows['active average'].values, 0, step='post')
+    ax.set_xlabel("Time", fontsize = "12")
+    ax.set_ylabel("Power [W]", fontsize = "12")
     ax.autoscale_view()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
     return fig
 
 
@@ -235,6 +241,8 @@ def plot_evaluation_assignments(sec_ground_truth, sec_disaggregations, assignmen
         ax.set_xlim([timeframe.start, timeframe.end])
         plt.setp(ax.get_xticklabels(), visible=False)
         plt.setp(ax.get_yticklabels(), visible=False)
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Activation")
 
     # Plot the original load
     for i, cur_nonzero in enumerate(sec_ground_truth):
@@ -248,6 +256,8 @@ def plot_evaluation_assignments(sec_ground_truth, sec_disaggregations, assignmen
         ax.set_xlim([timeframe.start, timeframe.end])
         plt.setp(ax.get_xticklabels(), visible=False)
         plt.setp(ax.get_yticklabels(), visible=False)
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Activation")
 
     # Plot assigned disaggregations right
     for i in range(len(sec_ground_truth)):
@@ -261,6 +271,9 @@ def plot_evaluation_assignments(sec_ground_truth, sec_disaggregations, assignmen
         ax.set_xlim([timeframe.start, timeframe.end])
         plt.setp(ax.get_xticklabels(), visible=False)
         plt.setp(ax.get_yticklabels(), visible=False)
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Activation")
+
     return fig
 
 
@@ -373,15 +386,15 @@ def plot_clustering(clusterers, elements, columns_to_project,
 
     # Call the plotting
     if len(columns_to_project) == 2:
-        fig = plot_clustering_2d(clusterers, data, labels, confidence, print_confidence, filter, **plot_args)
+        fig = plot_clustering_2d(clusterers, data, labels, confidence, columns_to_project, print_confidence, filter, **plot_args)
     elif len(columns_to_project) == 3:
-        fig = plot_clustering_3d(clusterers, data, labels, confidence, print_confidence, filter, **plot_args)
+        fig = plot_clustering_3d(clusterers, data, labels, confidence, columns_to_project, print_confidence, filter, **plot_args)
     else:
         raise Exception("Only 2d or 3d plot possible.")
     return fig
 
 
-def plot_clustering_2d(clusterers, data, labels, confidence, print_confidence = 1, filter = False, **plot_kwargs):
+def plot_clustering_2d(clusterers, data, labels, confidence, columns, print_confidence = 1, filter = False, **plot_kwargs):
     '''
     Plotting of points in 2d space. For K-means and gmm the bordes are also plotted.
 
@@ -396,6 +409,8 @@ def plot_clustering_2d(clusterers, data, labels, confidence, print_confidence = 
         The labels the datapoints belong to
     confidence: np.ndarray(bool)
         Bool whether the point is seen as confident
+    columns: str
+        The columns which are printed as label of the axis.
     print_confidence: int
         If not zero, the confidence interval which will be plotted.
     filter: bool
@@ -410,12 +425,15 @@ def plot_clustering_2d(clusterers, data, labels, confidence, print_confidence = 
     '''
 
     fig = plt.figure()
-    plot_kwargs.setdefault('cmap', plt.cm.Set3)
+
+    plot_kwargs.setdefault('cmap', plt.cm.Set1)
     color = plot_kwargs["cmap"](labels)
     plot_kwargs["s"] = 5
 
     # Print the datapoints
     plt.scatter(data[confidence][:,0], data[confidence][:,1], c=color[confidence], alpha = 1, **plot_kwargs)
+    plt.xlabel("Power Transition [W]")  #columns[0]
+    plt.ylabel("Power Peak [W]")        #columns[1]
     if not filter:
         plt.scatter(data[~confidence][:,0], data[~confidence][:,1], c=color[~confidence], alpha = 0.5, **plot_kwargs)
 
@@ -431,14 +449,15 @@ def plot_clustering_2d(clusterers, data, labels, confidence, print_confidence = 
             w = w[0,:] / np.linalg.norm(w[0,:])
             angle = np.arctan(w[1] / w[0])
             angle = 180. * angle / np.pi  # convert to degrees
-            ell = mpl.patches.Ellipse(mean, v[0], v[1], 180. + angle, color='black', fill = False)
+            ell = mpl.patches.Ellipse(mean, v[0], v[1], 180. + angle, color='black', fill = False, linewidth = 3)
             ell.set_clip_box(fig.bbox)
             ell.set_alpha(0.5)
             fig.axes[0].add_artist(ell)
+    plt.show()
     return fig
 
 
-def plot_clustering_3d(clusterers, data, labels, confidence, print_confidence = True, filter = False, **plot_kwargs):
+def plot_clustering_3d(clusterers, data, labels, confidence, columns, print_confidence = True, filter = False, **plot_kwargs):
     '''
     Plotting of points in 3d space with optional colouring after assignments.
 
@@ -451,6 +470,9 @@ def plot_clustering_3d(clusterers, data, labels, confidence, print_confidence = 
         The labels the datapoints belong to
     confidence: np.ndarray(bool)
         Bool whether the point is seen as confident
+    columns: str
+        The columns which are printed as label of the axis.
+        Not yet used as plot labels.
     print_confidence: int
         If not zero, the confidence interval which will be plotted.
         Not yet supported for 3D!!!
@@ -465,7 +487,7 @@ def plot_clustering_3d(clusterers, data, labels, confidence, print_confidence = 
         The newly plot axes. One has to have a look how to make it a figure.
     '''
 
-    plot_kwargs.setdefault('cmap', plt.cm.Set3)
+    plot_kwargs.setdefault('cmap', plt.cm.Set1)
     color = plot_kwargs["cmap"](labels)
 
     ax = plt.axes(projection='3d');
@@ -477,6 +499,39 @@ def plot_clustering_3d(clusterers, data, labels, confidence, print_confidence = 
     return ax
 
 
+def plot_correlation_matrix(corr_base, corr_disag, corr_base_clustered, corr_disag_clustered, corr_all):
+
+    #  native implementation
+    corrs = [corr_base, corr_disag, corr_base_clustered, corr_disag_clustered, corr_all]
+    names = ["corr_households", "corr_disag", "corr_households_clustered", "corr_disag_clustered", "corr_all"]
+    
+    for cur in range(len(corrs)):
+        if 'cluster' in corrs[cur].columns:
+            corrs[cur] = corrs[cur].sort_values("cluster").drop(columns=['cluster'])
+
+    columns =[]
+    for cur in corr_base.columns:
+        if cur[0] == 'hour' or cur[0] == 'weekday':
+            columns.append(cur[1])
+        else:
+            columns.append(cur[0])
+
+    for names, corr in zip(names, corrs):
+        columns =[]
+        for cur in corr.columns:
+            if cur[0] == 'hour' or cur[0] == 'weekday':
+                columns.append(cur[1])
+            else:
+                columns.append(cur[0])
+    
+        sns.set_style("white")
+        plt.figure()
+        cax = plt.matshow(corr.values.astype(float), cmap = plt.cm.seismic, vmin=-1, vmax=1,  aspect='auto')
+        plt.colorbar(cax)
+        plt.xticks(range(len(columns)), columns);
+        #plt.yticks(range(len(corr.index)), range(len(corr.index)));
+        #plt.tight_layout()
+        plt.savefig("F:/" + names + ".svg", bbox_inches='tight')
 
 def plot_correlations(orig_corrs, disag_corrs, cluster_corrs):
     '''

@@ -530,7 +530,7 @@ def _pre_matching(prediction, ground_truth, metric = "MCC", plotting_path = Fals
         plots.latexify(fontsize=11)
         plots.plot_evaluation_assignments(gt_abovebaseload_sec, pred_abovebaseload_sec, assignments, ground_truth,
                                         TimeFrame(timeframe.start, timeframe.start + pd.Timedelta("2d")))
-        plt.savefig(plotting_path + "\matching_plot.pdf")
+        plt.savefig(plotting_path + "matching_plot.pdf")
 
     assigned_metegroups = []
     for assignment in assignments:

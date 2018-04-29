@@ -11,7 +11,7 @@ from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.cluster import KMeans, AgglomerativeClustering
 import sklearn.metrics
 from .clusterer import Clusterer
-from nilmtk import DataSet, ExternDataSet
+from nilmtk import DataSet, ExternDataSet, ElecMeter, MeterGroup
 import time
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 import pickle as pckl
@@ -46,18 +46,39 @@ class ExtCorrelationClustererModel(object):
         'weekdayFeatures': ["0-5","5-6","6-7"],
 
         # Momentan wird keine Autokorrelation benutzt
-        'shifts': [], #list(range(1,5)) + [cur*96 for cur in range(7)] + [cur*96*7 for cur in range(4)],
+        'shifts': [], #list(range(1,8)) + [cur*96 for cur in range(7)] + [cur*96*7 for cur in range(4)],
 
         # Self correlation resolution (The resolution in which the self resolution is checked)
         'self_corr_freq': 60*15,
         
         # The type of correlation used to build up the vectors
-        'method': 'pearson' #'pearson', 'kendall', 'spearman'
+        'method': 'pearson', #'pearson', 'kendall', 'spearman'
+
+        # The sample period for the load profiles
+        'sample_period': 300,
+
+        # The section in which to perform the correlation, Of type timeframe
+        'section': None,
+
+        # How the meters are grouped and the correlation calculated
+        'grouping': 'single'   #'single', 'all', 'grouped'
     }
         
     config = {
         'size_input_queue': 0
     }
+
+    def __init__(self, args = {}):
+        '''
+        The paramters are set to the optional paramters handed in by the constructor.
+        
+        Parameters
+        ----------
+        args: dic
+            Parameters which are optionally set
+        '''
+        for arg in args:
+            self.params[arg] = args[arg]
 
 
 
@@ -109,14 +130,14 @@ class ExtCorrelationClusterer(Clusterer):
         # Add the time related features
         global corrdataframe
         corrdataframe = group_data[dim]
-        days = current_loadseries[:-1].index.weekday.values
+        days = current_loadseries.index.weekday.values
         for weekday in weekdays:
             idx = ('weekday', weekday)
             days_of_group = set(range(int(weekday[0]),int(weekday[2])))
             corrdataframe[idx] = False
             for day in days_of_group:
                 corrdataframe[idx] |= (days == day)
-        hours = current_loadseries[:-1].index.hour.values
+        hours = current_loadseries.index.hour.values
         for dayhour in dayhours:
             idx = ('hour', dayhour)
             hours_of_group = set(range(int(dayhour[:2]),int(dayhour[3:])))
@@ -144,7 +165,7 @@ class ExtCorrelationClusterer(Clusterer):
 
 
 
-    def calculate_correlations(self, meters, extDataSet, n_jobs = -1, verbose = False):
+    def calculate_correlations(self, meters, extDataSet, n_jobs = -1, tmp_folder = None, verbose = False):
         ''' Function only setting up the correlations without clustering.
         Sometimes it is also required to just get the correlations.
 
@@ -166,8 +187,10 @@ class ExtCorrelationClusterer(Clusterer):
             DataFrame with a column per external feature 
             and a row for each meter.
         '''
-
-         # We need global variables if we want to use multiprocessing
+        #try:
+        #    return pckl.load(open(tmp_folder + "_" + self.model.params['grouping'],'rb'))
+        #except:
+            # We need global variables if we want to use multiprocessing
         global current_loadseries
         global group_data
         global corrdataframe
@@ -187,49 +210,65 @@ class ExtCorrelationClusterer(Clusterer):
         periodsExtData = [int(dev['sample_period']) for dev in extDataSet.metadata['meter_devices'].values()]
         min_sampling_period = min(periodsExtData + [self.model.params['self_corr_freq']]) * 2
 
-        # Group the meters by there zip
-        metergroups = meters.groupby('zip', use_appliance_metadata = False)
+        # Group the meters by the designated strategy
+        try:
+            if self.model.params['grouping'] == 'single':
+                metergroups = meters.groupby('zip', use_appliance_metadata = False)
+                zips = list(metergroups.keys())
+                metergroups = metergroups.values()              
+            elif self.model.params['grouping'] == 'all':
+                metergroups =  [MeterGroup([meters])]
+                zips = [meters.meters[0].building_metadata['zip']]        
+            elif self.model.params['grouping'] == 'cluster':
+                metergroups =  [meters]
+                zips = [meters.meters[0].meters[0].building_metadata['zip']]       
+
+        except:
+            zips = [meters.meters[0][1].building_metadata['zip']] * len(meters)
+
         processed_meters = 0
-        for zip in metergroups:
-            group = metergroups[zip]
+        for i, group in enumerate(metergroups):
+            zip = zips[i]                        
+            
             # Load the groupspecific data (weather)
-            group_data = extDataSet.get_data_for_group(zip, group.get_timeframe(), 300, self.model.params['externalFeatures']) # min_sampling_period
+            group_data = extDataSet.get_data_for_group(zip, self.model.params['section'], 300, self.model.params['externalFeatures']) # min_sampling_period
+                
             # Then go through all meters
             for processed_meters, meter in enumerate(group.meters):
 
                 # meters load (Und wieder auf kontinuierliche Zeitreihe bringen)
-                current_loadseries = meter.power_series_all_data(dtype='float16')#, load_kwargs={'sample_period':min_sampling_period})
+                current_loadseries = meter.power_series_all_data(dtype='float16', sample_period = self.model.params['sample_period'], sections = self.model.params['section'], tmp_folder = tmp_folder, verbose=verbose)#, load_kwargs={'sample_period':min_sampling_period})
+                    
                 if processed_meters == 0:
                     self.set_up_corrdataframe(dims,self.model.params['weekdayFeatures'], self.model.params['hourFeatures'])
                 
+                # Multiprocessing currently deactivated
                 #if processed_meters != 0:
                 #    newSeries = pd.Series(index = current_loadseries.asfreq('4s').index)
                 #    resampledload = current_loadseries.combine_first(newSeries)
                 #    resampledload = resampledload.interpolate()
-                #    current_loadseries = resampledload.resample('2min', how='mean')
-               
+                #    current_loadseries = resampledload.resample('2min', how='mean')               
                 #pool = multiprocessing.Pool(processes=n_jobs)
                 #corr_vector = pool.map(correlate, dims)
 
                 corr_vector = []
-                t1 = time.time()
                 corr_vector = self.correlate()
                 corrs.loc[meter.identifier,:] = corr_vector
-                t2 = time.time()
-
 
                 if verbose:
                     print('Correlation set up for {0} - {1}/{2}'.format(meter,processed_meters,len(group.meters)))
+            
+        #pckl.dump(corrs, open(tmp_folder + "_" + self.model.params['grouping'],'wb'))
         return corrs
 
         
+    
 
-
-    def cluster(self, meters, extDataSet, target_file, return_correlations = False, n_jobs = -1, verbose = False):
+    def cluster(self, meters, extDataSet, target_file, return_correlations = False, tmp_folder = None,  n_jobs = -1, verbose = False):
         ''' The main clustering function.
 
         Do it in a parallelized way to accellerate it. 
-        Take care that only households below a maximum consumption of 32kw are 
+        Take care that only households bmelow a maximum consumption of 32kw are 
         supported as we use 16bit integers.
         To accellerate the process the calculation is performed in the following 
         way: One thread is loading. One is doing the correlation. One is storing.
@@ -263,10 +302,7 @@ class ExtCorrelationClusterer(Clusterer):
         '''
         
         # First calculate the correlations
-        try:
-            corrs = pckl.load(open("E:/coors.pckl",'rb'))
-        except:
-            corrs = self.calculate_correlations(meters, extDataSet)
+        corrs = self.calculate_correlations(meters, extDataSet, tmp_folder = tmp_folder, verbose = verbose)
 
         # Do the clustering after the created vectors
         centroids, assignments  = self._cluster_vectors(corrs, 5)
@@ -340,7 +376,7 @@ class ExtCorrelationClusterer(Clusterer):
                 # Then score each of it and take the best one
                 try:
                     sh_n = sklearn.metrics.silhouette_score(
-                        events, k_means_labels[n_clusters], metric='euclidean')
+                        clusteringInput, k_means_labels[n_clusters], metric='euclidean')
                     if sh_n > silhouette:
                         silhouette = sh_n
                         num_clusters = n_clusters
@@ -353,7 +389,7 @@ class ExtCorrelationClusterer(Clusterer):
                 else:
                     return np.array([0])
         centroids = scaler.inverse_transform(k_means_cluster_centers[num_clusters])
-        return centroids.flatten(), k_means_labels[num_clusters]
+        return centroids, k_means_labels[num_clusters]
 
     
 

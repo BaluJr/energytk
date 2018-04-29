@@ -37,7 +37,7 @@ class OverBasepowerSections(Node):
     def process(self):
         metadata = self.upstream.get_metadata()
         self.check_requirements()
-        self.results = OverBasepowerSectionsResults(2.3)
+        self.results = OverBasepowerSectionsResults(2.3) #TODO
         for chunk in self.upstream.process():
             self._process_chunk(chunk)
             yield chunk

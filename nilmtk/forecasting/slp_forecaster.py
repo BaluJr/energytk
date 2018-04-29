@@ -2,7 +2,8 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as dates
-#import seaborn as sns
+import seaborn as sns
+from nilmtk import plots
 
 class SlpForecasterModel(object):
     '''
@@ -80,17 +81,23 @@ class SlpForecaster(object):
     def plot(self):
         ''' Plots the used standard load profiles. 
         '''
-        sns.set_context("notebook", font_scale=2, rc={"lines.linewidth": 3})
-        ax = profiles['Winter'].plot()
+        plots.latexify(fontsize=12, columns=1)
+        #sns.set_context("notebook", font_scale=2, rc={"lines.linewidth": 3})
+        print("Plot Winter.")
+        ax = self.profiles['Winter'].plot()
         ax.set_ylabel('Factor')
         ax.set_xlabel('Time of Day')
         ax.yaxis.labelpad = 10
-        ax = profiles['Summer'].plot()
+        print("Plot Summer.")
+        #plt.gca().xaxis.set_major_locator(dates.HourLocator())
+        #plt.gca().xaxis.set_major_formatter(dates.DateFormatter('%H:%M'))
+        ax = self.profiles['Summer'].plot()
         ax.set_ylabel('Factor')
         ax.set_xlabel('Time of Day')
         ax.yaxis.labelpad = 10
-        plt.gca().xaxis.set_major_locator(dates.HourLocator())
-        plt.gca().xaxis.set_major_formatter(dates.DateFormatter('%H:%M'))
+        #plt.gca().xaxis.set_major_locator(dates.HourLocator())
+        #plt.gca().xaxis.set_major_formatter(dates.DateFormatter('%H:%M'))
+        plt.show()
         i = 1
 
 

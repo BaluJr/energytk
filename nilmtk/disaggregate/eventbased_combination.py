@@ -8,7 +8,7 @@ from nilmtk.disaggregate import UnsupervisedDisaggregator, UnsupervisedDisaggreg
 import numpy as np
 import pandas as pd
 from functools import reduce, partial
-from multiprocessing import Pool
+#from multiprocessing import Pool
 from sklearn.cluster import KMeans, AgglomerativeClustering, MeanShift, DBSCAN
 from collections import Counter
 from sklearn_pandas import DataFrameMapper  
@@ -609,8 +609,9 @@ def find_appliances(params):
     twoevents['subtype'] = subtypes
     if plotting_path:
         nilmtk.plots.latexify(fontsize=11)
-        nilmtk.plots.plot_clustering(clusterers, twoevents, ["transition_avg", "spike_up"], s=0.1)
-        plt.savefig(plotting_path + "\segmentation_clusterer.png")
+        nilmtk.plots.plot_clustering(clusterers, twoevents, ["transition_avg", "spike_up"], s=0.5)
+        plt.tight_layout()
+        plt.savefig(plotting_path + "\disag_clusterer.pdf")
     transients = transients.join(twoevents[['appliance', 'confident', 'subtype']], on="segment")
     transients['appliance'] = transients['appliance'].fillna(-1)
     transients['confident'] = transients['confident'].fillna(0).astype(bool)
@@ -1007,8 +1008,8 @@ def _gmm_confidence_check(X, prediction, clusterer, check_for_variance_dims, ret
         indices = np.where(np.in1d(X.columns, check_for_variance_dims))[0]
         stddevs = np.sqrt(covar.diagonal()[indices])
         means =  np.abs(mean[indices])
+        subcluster_recommendations.append(i)
         if ((stddevs > 0.3 * means) & (stddevs > 10)).any() and not ((stddevs < 0.01 * means).any()):
-            subcluster_recommendations.append(i)
             continue
 
         # 2. Exclude too small clusters!
@@ -1225,7 +1226,7 @@ class EventbasedCombination(UnsupervisedDisaggregator):
             tmp_folder = tmp_folder + "/"
 
         ### Prepare
-        pool = Pool(processes=3)
+        #pool = Pool(processes=3)
         model = self.model
         model.steady_states = []
         model.transients = []
@@ -1255,6 +1256,7 @@ class EventbasedCombination(UnsupervisedDisaggregator):
             t1 = time.time()
             loader, steady_states_list, transients_list = [], [], []
             try:
+              pass
               self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '.pckl', 'rb'))
               model.appliances = []
             except:
@@ -1305,6 +1307,7 @@ class EventbasedCombination(UnsupervisedDisaggregator):
         # 2. Create separate powerflows with events, shared by multiple phases
         t1 = time.time()
         try:
+            #pass
             self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_phases_separated.pckl', 'rb'))
         except:
             if len(model.transients) > 1:
@@ -1326,10 +1329,19 @@ class EventbasedCombination(UnsupervisedDisaggregator):
                self.model.transients[i] = add_segments(input_params[-1])
             #self.model.transients = pool.map(add_segments, input_params)
             if plotting_path:
+                plt_phase = 1 if num_phases > 0 else 0
                 nilmtk.plots.latexify(fontsize=11)
-                self.model.steady_states[0]['starts'] = self.model.transients[0]['starts']
-                nilmtk.plots.plot_segments(self.model.transients[0].set_index('starts')[pd.Timestamp("1970-01-02 12:00"):pd.Timestamp("1970-01-02 18:00")].reset_index(), self.model.steady_states[0][pd.Timestamp("1970-01-02 12:00"):pd.Timestamp("1970-01-02 18:00")])
-                plt.savefig(plotting_path + "\segmentation_segments.png")
+                self.model.steady_states[plt_phase]['starts'] = self.model.transients[0]['starts']
+                start = self.model.transients[plt_phase]['starts'][0].round('d')
+                ax = self.model.transients[plt_phase].set_index("starts")['active transition'].loc[start + pd.Timedelta('1.25d'):start + pd.Timedelta('1.5d')].cumsum().resample('2s', how='ffill').plot()
+                ax.set_ylabel("Power [W]")
+                ax.set_xlabel("Time")
+                plt.savefig(plotting_path + "\original_powerflow.pdf")
+                
+                nilmtk.plots.latexify(fontsize=11)
+                nilmtk.plots.plot_segments(self.model.transients[plt_phase].set_index('starts')[start + pd.Timedelta('1.25d'):start + pd.Timedelta('1.5d')].reset_index(), 
+                                            self.model.steady_states[plt_phase][start + pd.Timedelta('1.25d'):start + pd.Timedelta('1.5d')])
+                plt.savefig(plotting_path + "\segmentation_segments.pdf")
             print('Segment separation: ' + str(time.time() - t1))
 
             ## 4. Create all events which per definition have to belong together (tuned Hart)
@@ -1345,8 +1357,9 @@ class EventbasedCombination(UnsupervisedDisaggregator):
                model.clusterer[i] = result[i]['clusterer']
             if not tmp_folder is None:
                pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appfound.pckl', 'wb'))
-        print("Find appliances: " + str(time.time() - t2))
-
+            print("Find appliances: " + str(time.time() - t2))
+        print("Found appliances")
+        
         # 5. Create the appliances (Pay attention, id per size and subtype) and rest powerflow
         try:
             self.model = model = pckl.load(open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'rb'))
@@ -1356,8 +1369,8 @@ class EventbasedCombination(UnsupervisedDisaggregator):
             input_params, results = [], []
             for i in range(num_phases): #len(model.transients)):
                 input_params.append((self.model.transients[i], self.model.overall_powerflow[i], self.model.params['min_appearance'], not exact_nilm_datastore is None))
-                #results.append(create_appliances(input_params[-1]))
-            results = pool.map(create_appliances, input_params)
+                results.append(create_appliances(input_params[-1]))
+            #results = pool.map(create_appliances, input_params)
             for i in range(num_phases):
                model.appliances.append(results[i]['appliances'])
                model.overall_powerflow[i] = results[i]['overall_powerflow']
@@ -1372,7 +1385,8 @@ class EventbasedCombination(UnsupervisedDisaggregator):
                    model.appliances_detailed.append(result['exact_nilm'])
             if not tmp_folder is None:
                pckl.dump(model, open(tmp_folder + str(metergroup.identifier) + '_appcreated.pckl', 'wb'))
-        print("Put together appliance powerflows: " + str(time.time() - t3))
+            print("Put together appliance powerflows: " + str(time.time() - t3))
+        print("Appliance powerflows put together.")
 
 
         # 5. Store the results (Not in parallel since writing to same file)
@@ -1402,182 +1416,6 @@ class EventbasedCombination(UnsupervisedDisaggregator):
             )
         print("STORED: " + str(time.time()-t4) + "\n\n")
 
-
-
-    def _save_metadata_for_disaggregation(self, output_datastore, sample_period, measurement, timeframes,
-                                          building,meters=None, num_meters=None, supervised=True,
-                                          original_building_meta = None, rest_powerflow_included = False):
-        """Add metadata for disaggregated appliance estimates to datastore.
-
-        REMINDER: Also urpruenglich wollte ich das anders machen und eben auch die Metadatan mit abspeichern.
-                  Habe ich aus zeitgruenden dann gelassen und mache es doch so wie es vorher war.
-        
-        This function first checks whether there are already metainformation in the file.
-        If zes, it extends them and otherwise it removes them.
-
-        Note that `self.MODEL_NAME` needs to be set to a string before
-        calling this method.  For example, we use `self.MODEL_NAME = 'CO'`
-        for Combinatorial Optimisation.
-
-        TODO:`preprocessing_applied` for all meters
-        TODO: submeter measurement should probably be the mains
-              measurement we used to train on, not the mains measurement.
-
-        Parameters
-        ----------
-        output_datastore : nilmtk.DataStore subclass object
-            The datastore to write metadata into.
-        sample_period : int
-            The sample period, in seconds, used for both the
-            mains and the disaggregated appliance estimates.
-        measurement : 2-tuple of strings
-            In the form (<physical_quantity>, <type>) e.g.
-            ("power", "active")
-        timeframes : list of nilmtk.TimeFrames or nilmtk.TimeFrameGroup
-            The TimeFrames over which this data is valid for.
-        building : int
-            The building instance number (starting from 1)
-        supervised : bool, defaults to True
-            Is this a supervised NILM algorithm?
-        meters : list of nilmtk.ElecMeters, optional
-            Required if `supervised=True`
-        num_meters : [int]
-            Required if `supervised=False`, Gives for each phase amount of meters
-        """
-
-        # DataSet and MeterDevice metadata only when not already available
-        try:
-            metadata = output_datastore.load_metadata()
-            timeframes.append(TimeFrame(start=metadata["timeframe"]["start"], end=metadata["timeframe"]["end"]))
-            total_timeframe = TimeFrameGroup(timeframes).get_timeframe()
-            dataset_metadata = {
-                'name': metadata["name"],
-                'date': metadata["date"],
-                'meter_devices': metadata["meter_devices"],
-                'timeframe': total_timeframe.to_dict()
-            }
-            output_datastore.save_metadata('/', dataset_metadata)
-        except:
-            pq = 3
-            meter_devices = {
-                'disaggregate' : {
-                    'model': str(EventbasedCombinationDisaggregatorModel), #self.model.MODEL_NAME,
-                    'sample_period': sample_period if rest_powerflow_included else 0, # Makes it possible to use special load functionality
-                    'max_sample_period': sample_period,
-                    'measurements': [{
-                        'physical_quantity': 'power', #measurement.levels[0][0],
-                        'type': 'active' #measurement.levels, #[1][0]
-                    }]
-                }}
-
-            if rest_powerflow_included:
-                meter_devices['rest'] = {
-                        'model': 'rest',
-                        'sample_period': sample_period,
-                        'max_sample_period': sample_period,
-                        'measurements': [{
-                            'physical_quantity': 'power', #measurement.levels, #[0][0],
-                            'type': 'active' #measurement.levels, #[1][0]
-                        }]
-                    }
-            total_timeframe = TimeFrameGroup(timeframes).get_timeframe()
-
-            date_now = datetime.now().isoformat().split('.')[0]
-            dataset_metadata = {
-                'name': str(EventbasedCombinationDisaggregatorModel),
-                'date': date_now,
-                'meter_devices': meter_devices,
-                'timeframe': total_timeframe.to_dict()
-            }
-            output_datastore.save_metadata('/', dataset_metadata)
-
-
-        # Building metadata always stored for the new buildings
-        for i in range(len(num_meters)):
-            phase_building = building * 10 + i 
-            building_path = '/building{}'.format(phase_building)
-            mains_data_location = building_path + '/elec/meter1'
-
-            # Rest meter:
-            elec_meters = {}
-            if rest_powerflow_included:
-                elec_meters[1] = {
-                    'device_model': 'rest',
-                    #'site_meter': True,
-                    'data_location': mains_data_location,
-                    'preprocessing_applied': {},  # TODO
-                    'statistics': {
-                        'timeframe': total_timeframe.to_dict()
-                    }
-                }
-            
-
-            def update_elec_meters(meter_instance):
-                elec_meters.update({
-                    meter_instance: {
-                        'device_model': 'disaggregate', # self.MODEL_NAME,
-                        'submeter_of': 1,
-                        'data_location': (
-                            '{}/elec/meter{}'.format(
-                                building_path, meter_instance)),
-                        'preprocessing_applied': {},  # TODO
-                        'statistics': {
-                            'timeframe': total_timeframe.to_dict()
-                        }
-                    }
-                })
-
-            # Appliances and submeters:
-            appliances = []
-            if supervised:
-                for meter in meters:
-                    meter_instance = meter.instance()
-                    update_elec_meters(meter_instance)
-
-                    for app in meter.appliances:
-                        appliance = {
-                            'meters': [meter_instance],
-                            'type': app.identifier.type,
-                            'instance': app.identifier.instance 
-                            # TODO this `instance` will only be correct when the
-                            # model is trained on the same house as it is tested on
-                            # https://github.com/nilmtk/nilmtk/issues/194
-                        }
-                        appliances.append(appliance)
-
-                    # Setting the name if it exists
-                    if meter.name:
-                        if len(meter.name) > 0:
-                            elec_meters[meter_instance]['name'] = meter.name
-            else:  # Unsupervised
-                # Submeters:
-                # Starts at 2 because meter 1 is mains.
-                for chan in range(2, num_meters[i] + 1): # Additional + 1 because index 0 skipped
-                    update_elec_meters(meter_instance=chan)
-                    appliance = {
-                        'meters': [chan],
-                        'type': 'unknown',
-                        'instance': chan - 1
-                        # TODO this `instance` will only be correct when the
-                        # model is trained on the same house as it is tested on
-                        # https://github.com/nilmtk/nilmtk/issues/194
-                    }
-                    appliances.append(appliance)
-
-            if len(appliances) == 0:
-                continue 
-
-            building_metadata = {
-                'instance': (phase_building),
-                'elec_meters': elec_meters,
-                'appliances': appliances,
-                'original_name': original_building_meta['original_name'] if 'original_name' in original_building_meta else None,
-                'geo_location': original_building_meta['geo_location'] if 'geo_location' in original_building_meta else None,
-                'zip': original_building_meta['zip'] if 'zip' in original_building_meta else None,
-            }
-            print(building_path)
-            output_datastore.save_metadata(building_path, building_metadata)
-   
 
 
     def disaggregate_single_phase(self, transients, steady_states):

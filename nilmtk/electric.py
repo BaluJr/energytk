@@ -25,6 +25,7 @@ from .plots import plot_series
 from .preprocessing import Apply
 from nilmtk.stats.histogram import histogram_from_generator
 from nilmtk.appliance import DEFAULT_ON_POWER_THRESHOLD
+import pickle as pckl
 
 MAX_SIZE_ENTROPY = 10000
 
@@ -114,6 +115,23 @@ class Electric(MeterSeries):
         return False
 
     def power_series_all_data(self, **load_kwargs):
+        from nilmtk import MeterGroup
+        if "tmp_folder" in load_kwargs and not load_kwargs['tmp_folder'] is None:
+            try:
+                tmp = None
+                if type(self) is MeterGroup:
+                    for elec in self.all_elecmeters():
+                        if tmp is None:
+                            tmp = elec.power_series_all_data(**load_kwargs)
+                        else:
+                            tmp += elec.power_series_all_data(**load_kwargs)
+                else:
+                    tmp = pckl.load(open(load_kwargs['tmp_folder'] + str(self.identifier), "rb"))
+                    print("use cached")
+                return tmp
+            except:
+                print("not cached")
+
         chunks = []
         for series in self.power_series(**load_kwargs):
             if len(series) > 0:
@@ -130,6 +148,11 @@ class Electric(MeterSeries):
             all_data = pd.concat(chunks)
         else:
             all_data = None
+
+        if "tmp_folder" in load_kwargs and not load_kwargs['tmp_folder'] is None and not type(self) is MeterGroup:
+            pckl.dump(all_data, open(load_kwargs['tmp_folder'] + str(self.identifier), "wb"))
+            print('write cached')
+
         return all_data
 
     def _prep_kwargs_for_sample_period_and_resample(self, sample_period=None,

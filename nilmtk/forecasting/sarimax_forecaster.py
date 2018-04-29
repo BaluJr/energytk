@@ -45,7 +45,7 @@ class SarimaxForecasterModel(object):
         'external_feature': ('temperature', ''),  
 
         # Only the last elements of original_data are used for training (default = 10 days)
-        "trainingdata_limit": 960 * 3
+        "trainingdata_limit": 960# * 3
     }
 
     model = None
@@ -136,7 +136,7 @@ class SarimaxForecaster(Forecaster):
             # Fit the model if not already done
             model = SARIMAX(endog = chunk, order=(params['p'],params['d'],params['q']), 
                             seasonal_order = (params['P'],params['D'],params['Q'], params['S']), 
-                            enforce_stationarity = False, enforce_invertibility = False)#, exog = ext_chunk)
+                            enforce_stationarity = False, enforce_invertibility = False)#, exog = ext_chunk.ffill().bfill())
             self.model.model_sarimax = model
             model_fit = model.fit(disp=verbose)
             if return_residuals:

@@ -5,8 +5,8 @@ import pandas as pd
 from nilmtk.feature_detectors.cluster import hart85_means_shift_cluster
 from nilmtk.feature_detectors.steady_states import (
     find_steady_states_transients)
-from nilmtk.disaggregate import SupervisedDisaggregator
-
+from nilmtk.disaggregate import UnsupervisedDisaggregator
+from nilmtk import TimeFrame, TimeFrameGroup
 
 # Fix the seed for repeatability of experiments
 SEED = 42
@@ -192,7 +192,7 @@ class PairBuffer(object):
 
 
 
-class Hart85(SupervisedDisaggregator):
+class Hart85(UnsupervisedDisaggregator):
     """1 or 2 dimensional Hart 1985 algorithm.
 
     Attributes
@@ -246,7 +246,7 @@ class Hart85(SupervisedDisaggregator):
             metergroup, cols, noise_level, state_threshold, **kwargs)
         self.pair_df = self.pair(
             buffer_size, min_tolerance, percent_tolerance, large_transition)
-        self.centroids = hart85_means_shift_cluster(self.pair_df, cols)
+        self.centroids = hart85_means_shift_cluster(self.pair_df, cols)[0]
         self.model = "SET" # Sothat check is fullfilled
 
     def pair(self, buffer_size, min_tolerance, percent_tolerance,
@@ -381,7 +381,7 @@ class Hart85(SupervisedDisaggregator):
             # print(power.sum())
         return di
 
-    def disaggregate(self, mains, output_datastore = None, **load_kwargs):
+    def disaggregate(self, mains, output_datastore = None, exact_nilm_datastore = None, **load_kwargs):
         """Disaggregate mains according to the model learnt previously.
 
         Parameters
@@ -394,13 +394,14 @@ class Hart85(SupervisedDisaggregator):
         **load_kwargs : key word arguments
             Passed to `mains.power_series(**kwargs)`
         """
+        mains = mains.sitemeters() # Only the main elements are interesting
         load_kwargs = self._pre_disaggregation_checks(mains, load_kwargs)
 
-        load_kwargs.setdefault('sample_period', 60)
+        load_kwargs.setdefault('sample_period', 2)
         load_kwargs.setdefault('sections', mains.good_sections())
 
         timeframes = []
-        building_path = '/building{}'.format(mains.building())
+        building_path = '/building{}'.format(mains.building() * 10)
         mains_data_location = building_path + '/elec/meter1'
         data_is_available = False
 
@@ -429,7 +430,7 @@ class Hart85(SupervisedDisaggregator):
 
             cols = pd.MultiIndex.from_tuples([chunk.name])
 
-            if output_datastore != None:
+            if False: #output_datastore != None:
                 for meter in learnt_meters:
                     data_is_available = True
                     df = power_df[[meter]]
@@ -444,19 +445,45 @@ class Hart85(SupervisedDisaggregator):
                 else:
                     disaggregation_overall = disaggregation_overall.append(power_df)
 
-        if output_datastore != None:
-            if data_is_available:
-                self._save_metadata_for_disaggregation(
-                    output_datastore=output_datastore,
-                    sample_period=load_kwargs['sample_period'],
-                    measurement=measurement,
-                    timeframes=timeframes,
-                    building=mains.building(),
-                    supervised=False,
-                    num_meters=len(self.centroids)
-                )
-        else:
-            return disaggregation_overall
+
+        
+        for column in disaggregation_overall:
+            key = '{}/elec/meter{:d}'.format(building_path, column + 2) # 0 not existing and Meter1 is rest
+            tmp = disaggregation_overall[[column]]
+            tmp.columns = (pd.MultiIndex.from_tuples([('power', 'active')], names=['physical_quantity', 'type']))
+            output_datastore.append(key, tmp)
+            if not exact_nilm_datastore is None:
+                exact_nilm_datastore.append(key, self.model.appliances_detailed[[column]])
+        #output_datastore.append('{}/elec/meter{:d}'.format(building_path, 1), self.model.overall_powerflow[phase])
+        num_meters = [len(disaggregation_overall.columns)] 
+        stores = [(output_datastore, 300, True)] if exact_nilm_datastore is None else [(output_datastore, 300, True), (exact_nilm_datastore, 0, False)]
+        for store, res, rest_included in stores:
+            self._save_metadata_for_disaggregation(
+                output_datastore = store,
+                sample_period = res, 
+                measurement= pd.MultiIndex.from_tuples([('power', 'active')], names=['physical_quantity', 'type']),
+                timeframes = TimeFrameGroup([TimeFrame(start=disaggregation_overall[0].index[0], end=disaggregation_overall[0].index[-1])]),
+                building=mains.building(),
+                supervised=False,
+                num_meters=num_meters,
+                original_building_meta= mains.meters[0].building_metadata,
+                rest_powerflow_included = False
+            )
+
+
+        #if output_datastore != None:
+        #    if data_is_available:
+        #        self._save_metadata_for_disaggregation(
+        #            output_datastore=output_datastore,
+        #            sample_period=load_kwargs['sample_period'],
+        #            measurement=measurement,
+        #            timeframes=timeframes,
+        #            building=mains.building(),
+        #            supervised=False,
+        #            num_meters=len(self.centroids)
+        #        )
+        #else:
+        #    return disaggregation_overall
 
     """
     def export_model(self, filename):

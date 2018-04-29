@@ -15,7 +15,7 @@ class GaussianStateMachines(object):
     The signatures of all the appliances are superimposed to yield a final load profile.
     """
 
-    def simulate(self, output_datastore, appliance_specs = None, duration = 8640000):
+    def simulate(self, output_datastore, appliance_specs = None, duration = 8640000, seed = None):
         '''
         Performs the simulation of a defined interval of load profile.
         The style of the output is heavily linked to the EventbasedCombination
@@ -34,6 +34,10 @@ class GaussianStateMachines(object):
         duration: pd.Timedelta
             Circa duration of the created load profile.
             Default 100 days
+        seed: int
+            The seed number used within the random generation. This allows to 
+            genrate the same load profile multiple times. If kept None,
+            random seed is used.
         
         Returns
         -------
@@ -42,9 +46,8 @@ class GaussianStateMachines(object):
         steady_states: pd.DataFrame
             The steady states of the load profile
         '''
-        
-        # Each entry is Means,(transient, spike, duration), StdDevs
-        # Pay attention: No cutting, results must be over event treshold
+        np.random.seed(seed=seed)
+
         specs =[[((2000, 20, 15), (20, 6, 10)), ((-2000, 10, 15), (10, 3, 10))],                                                             # Heater 1
                 [((1500, 40, 15), (10, 6, 10)), ((-1500, 10, 15), (10, 2, 10))],                                                             # Heater 2
                 [((130, 10, 90), (10, 5, 30)),  ((-130, 10, 300), (10, 6, 50))],                                                             # Fridge
@@ -53,7 +56,7 @@ class GaussianStateMachines(object):
                 [((100, 0, 10*60), (10, 0.1, 80)),   ((-26, 0, 180), (5, 0.1, 50)),    ((-74,5, 480), (15,1,50))],                            # Complex2
                 [((320, 0, 60*2), (10, 3, 10)),   ((-40, 0, 180), (5, 0.1, 50)),    ((-100,5, 480), (15,1,50)),  ((-180,5, 480), (15,1,50))]] # Complex3
         # Breaks as appearances, break duration in Minutes, stddev
-        break_spec = [[5, 300, 10], [4, 600, 10], [7, 2*60,10], [1, 60*24, 180], [4, 60, 10], [2, 60, 10], [2, 60*6, 60*60]]
+        break_spec = [[5, 300, 10], [4, 600, 10], [7, 2*60,10], [1, 60*12, 180], [4, 60, 10], [2, 60, 10], [2, 60*6, 60*60]]
         #for i, bs in enumerate(break_spec): 
         #    bs[0] = bs[0]*len(specs[i])
 
