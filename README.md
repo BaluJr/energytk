@@ -1,16 +1,17 @@
-[![Build Status](https://travis-ci.org/nilmtk/nilmtk.svg?branch=master)](https://travis-ci.org/nilmtk/nilmtk)
-
-# NILMTK: Non-Intrusive Load Monitoring Toolkit
+# EnergyTK: Energy Toolkit
+Energy Toolkit has been startted as an extension of NilmTK. It became apparent that the utilized basic classes are perfectly capable to also support additional usecases apart from mere Nilm. 
+Short-Term Load Forecasting and Simulation of Powerflows 
 
 Non-Intrusive Load Monitoring (NILM) is the process of estimating the
 energy consumed by individual appliances given just a whole-house
 power meter reading.  In other words, it produces an (estimated)
 itemised energy bill from just a single, whole-house power meter.
 
-NILMTK is a toolkit designed to help **researchers** evaluate the accuracy of NILM algorithms. 
+NILMTK is a toolkit designed to help *researchers* evaluate the
+accuracy of NILM algorithms. 
 
-**As of June 2018, NILMTK is being revived! Although no major changes are expected in the coming months, the codebase is slowly being updated to work properly with the current Python ecosystem, especially to modern versions of our major dependency, *Pandas*. 
-It may take time for the NILMTK authors to get back to you regarding queries/issues. However, you are more than welcome to propose changes, support!** 
+**NILMTK is not being actively developed now. However, we believe it does the job it's intended to do! 
+It may take time for the original NILMTK authors to get back to you regarding queries/issues. However, you are more than welcome to propose changes, support!**.
 
 # Documentation
 
@@ -43,6 +44,7 @@ NILMTK includes:
 -  a common set of accuracy metrics
 -  and much more!
 
+
 # Publications
 
 Please see our [list of NILMTK publications](http://nilmtk.github.io/#publications).  If you use NILMTK in academic work then please consider citing our papers.
@@ -54,15 +56,13 @@ as a guide to the current API.
 
 # Keeping up to date with NILMTK
 
-* [NILMTK-Announce mailing list](https://groups.google.com/forum/#!forum/nilmtk-announce): stay up to speed with NILMTK.  This is a low-traffic mailing list.  We'll just announce new versions, new docs etc.
-* [NILMTK on Twitter](https://twitter.com/nilmtk).
+* [NILMTK-Announce mailing list](https://groups.google.com/forum/#!forum/energytk-announce): stay up to speed with NILMTK.  This is a low-traffic mailing list.  We'll just announce new versions, new docs etc. Not yet online!
 
 
 # History
 
-* April 2014: v0.1 released
+* April 2014: NilmTK v0.1 released
 * June 2014: NILMTK presented at [ACM e-Energy](http://conferences.sigcomm.org/eenergy/2014/)
-* July 2014: v0.2 released
+* July 2014: NilmTK v0.2 released
 * Nov 2014: NILMTK wins best demo award at [ACM BuildSys](http://www.buildsys.org/2014/)
-
-For more detail, please see our [changelog](https://github.com/nilmtk/nilmtk/blob/master/docs/manual/development_guide/changelog.md).
+* Mai 2018: EnergyTK is announced as the official successor of NilmTK, introducing several additional usecases apart from Nilm.
