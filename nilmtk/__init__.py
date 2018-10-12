@@ -8,12 +8,17 @@ warnings.filterwarnings('ignore', category=ImportWarning)
 from nilmtk import *
 from nilmtk.version import version as __version__
 from nilmtk.timeframe import TimeFrame
+from nilmtk.timeframegroup import TimeFrameGroup
 from nilmtk.elecmeter import ElecMeter
+from nilmtk.electric import Electric
 from nilmtk.datastore import DataStore, HDFDataStore, CSVDataStore, Key
 from nilmtk.metergroup import MeterGroup
 from nilmtk.appliance import Appliance
 from nilmtk.building import Building
 from nilmtk.dataset import DataSet
+from nilmtk.externdataset import ExternDataSet
+from nilmtk.datasetanalysis import DatasetAnalysis
+from nilmtk.UseCaseExecuter import UseCaseExecuter
 
 global_meter_group = MeterGroup()
 

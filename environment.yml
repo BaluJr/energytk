@@ -22,6 +22,12 @@ dependencies:
 - psycopg2
 - pip:  # Install packages which are not in conda. Install these using pip:
     - coveralls
-    - https://github.com/hmmlearn/hmmlearn/archive/ae1a41e4d03ea61b7a25cba68698e8e2e52880ad.zip#egg=hmmlearn
-    - https://github.com/nilmtk/nilm_metadata/archive/master.zip#egg=nilm_metadata
-    - https://github.com/nilmtk/nilmtk/archive/master.zip#egg=nilmtk
+    - hmmlearn==0.1.1
+    - psycopg2 # not available in conda for Windows.  See issue #462
+    - git+https://github.com/nilmtk/nilm_metadata.git#egg=nilm_metadata
+    - git+https://github.com/nilmtk/nilmtk.git#egg=nilmtk
+    - ipykernel # Needed to get jupyter notebook working with different kernel
+# I have no clue what this is about. Just kept it my way and have to solve later
+#- https://github.com/hmmlearn/hmmlearn/archive/ae1a41e4d03ea61b7a25cba68698e8e2e52880ad.zip#egg=hmmlearn
+#- https://github.com/nilmtk/nilm_metadata/archive/master.zip#egg=nilm_metadata
+#- https://github.com/nilmtk/nilmtk/archive/master.zip#egg=nilmtk

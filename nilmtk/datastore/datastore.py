@@ -34,6 +34,8 @@ class DataStore(object):
     ----------
     window : nilmtk.TimeFrame
         Defines the timeframe we are interested in.
+    filename: string
+        The filename where the store is located
     """
     def __init__(self):
         """
@@ -66,6 +68,10 @@ class DataStore(object):
 
     @window.setter
     def window(self, window):
+        '''
+        Sets the window we are interested in. Is used by dataset when
+        the datasets timewindow is set.
+        '''
         window.check_tz()
         self._window = window
         
@@ -163,7 +169,15 @@ class DataStore(object):
         metadata : dict
         """
         raise NotImplementedError("NotImplementedError")
-        
+
+    def update_root_metadata(self, new_metadata):        
+        '''
+        Hardly updates the metadata of the dataset. Pay 
+        attention, no validity checking performed.
+        '''
+        raise NotImplementedError("NotImplementedError")
+
+
     def elements_below_key(self, key='/'):
         """
         Returns

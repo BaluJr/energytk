@@ -17,6 +17,7 @@ class HDFDataStore(DataStore):
 
     @doc_inherit
     def __init__(self, filename, mode='a'):
+        self.filename = filename
         if mode == 'a' and not isfile(filename):
             raise IOError("No such file as " + filename)
         self.store = pd.HDFStore(filename, mode, complevel=9, complib='blosc')
@@ -26,9 +27,9 @@ class HDFDataStore(DataStore):
     def __getitem__(self, key):
         return self.store[key]
 
-    @doc_inherit
+    
     def load(self, key, columns=None, sections=None, n_look_ahead_rows=0,
-             chunksize=MAX_MEM_ALLOWANCE_IN_BYTES, verbose=False):
+             chunksize=MAX_MEM_ALLOWANCE_IN_BYTES, verbose=False, **additionalLoaderKwargs):
         # TODO: calculate chunksize default based on physical
         # memory installed and number of columns
 
@@ -45,10 +46,11 @@ class HDFDataStore(DataStore):
         sections = [TimeFrame()] if sections is None else sections
         sections = TimeFrameGroup(sections)
 
-        # Replace any Nones with '' in columns:
+        # Replace any Nones with '' in cols:
         if columns is not None:
             columns = [('' if pq is None else pq, '' if ac is None else ac)
                     for pq, ac in columns]
+            cols_idx = pd.MultiIndex.from_tuples(cols, names = ['physical_quantity', 'type'])
 
         if verbose:
             print("HDFDataStore.load(key='{}', columns='{}', sections='{}',"
@@ -62,8 +64,8 @@ class HDFDataStore(DataStore):
                 print("   ", section)
             window_intersect = self.window.intersection(section)
 
-            if window_intersect.empty:
-                data = pd.DataFrame()
+            if window_intersect.empty: # Wenn der abgefragte Zeitabschnitt nicht in der Datenreihe enthalten ist
+                data = pd.DataFrame(columns = cols_idx)
                 data.timeframe = section
                 yield data
                 continue
@@ -73,7 +75,7 @@ class HDFDataStore(DataStore):
                 section_start_i = 0
                 section_end_i = self.store.get_storer(key).nrows
                 if section_end_i <= 1:
-                    data = pd.DataFrame()
+                    data = pd.DataFrame(columns = cols_idx)
                     data.timeframe = section
                     yield data
                     continue
@@ -88,13 +90,16 @@ class HDFDataStore(DataStore):
                         raise
                 n_coords = len(coords)
                 if n_coords == 0:
-                    data = pd.DataFrame()
+                    data = pd.DataFrame(columns = cols_idx)
                     data.timeframe = window_intersect
                     yield data
                     continue
 
                 section_start_i = coords[0]
                 section_end_i   = coords[-1]
+                if section_start_i == section_end_i: # For corner cases where there is really only a single entry.
+                    section_end_i += 1
+
                 del coords
             slice_starts = range(section_start_i, section_end_i, chunksize)
             n_chunks = int(np.ceil((section_end_i - section_start_i) / chunksize))
@@ -110,11 +115,13 @@ class HDFDataStore(DataStore):
                     chunk_end_i = section_end_i
                 chunk_end_i += 1
 
-                data = self.store.select(key=key, columns=columns,
+                data = self.store.select(key=key, columns=cols_idx,
                                          start=chunk_start_i, stop=chunk_end_i)
 
-                # if len(data) <= 2:
-                #     yield pd.DataFrame()
+                if len(data) <= 2:
+                    data = pd.DataFrame(columns=cols_idx)
+                    data.timeframe = section
+                    yield data
 
                 # Load look ahead if necessary
                 if n_look_ahead_rows > 0:
@@ -155,16 +162,20 @@ class HDFDataStore(DataStore):
         self.store.flush()
 
     @doc_inherit
-    def put(self, key, value):
-        self.store.put(key, value, format='table', 
-                       expectedrows=len(value), index=False)
-        self.store.create_table_index(key, columns=['index'], 
-                                      kind='full', optlevel=9)
+    def put(self, key, value, fixed = False):
+        if fixed:
+            self.store.put(key, value, format = 'fixed')
+        else:
+            self.store.put(key, value, format='table', 
+                           expectedrows=len(value), index=False)
+            self.store.create_table_index(key, columns=['index'], 
+                                          kind='full', optlevel=9)
         self.store.flush()
 
     @doc_inherit
     def remove(self, key):
         self.store.remove(key)
+        self.store.flush()
 
     @doc_inherit
     def load_metadata(self, key='/'):
@@ -185,6 +196,11 @@ class HDFDataStore(DataStore):
 
         node._v_attrs.metadata = metadata
         self.store.flush()
+        
+    @doc_inherit
+    def update_root_metadata(self, new_metadata):
+        self.store.root._v_attrs.metadata = new_metadata
+        self.store.flush()
 
     @doc_inherit
     def elements_below_key(self, key='/'):
@@ -193,6 +209,10 @@ class HDFDataStore(DataStore):
         else:
             node = self.store.get_node(key)
         return list(node._v_children.keys())
+
+    @doc_inherit
+    def flush(self):
+        self.store.flush()
 
     @doc_inherit
     def close(self):

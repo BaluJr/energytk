@@ -100,7 +100,7 @@ def convert_eco(dataset_loc, hdf_filename, timezone):
                 for fi in fl_dir_list:
                     found_any_sm = True
                     df = pd.read_csv(join(dataset_loc,folder,fl,fi), names=[i for i in range(1,17)], dtype=np.float32)
-                    
+                    # SmartMeter
                     for phase in range(1,4):
                         key = str(Key(building=building_no, meter=phase))
                         df_phase = df.loc[:,[1+phase, 5+phase, 8+phase, 13+phase]]
@@ -141,7 +141,7 @@ def convert_eco(dataset_loc, hdf_filename, timezone):
                             store.flush()
                         print('Building', building_no, ', Meter no.', phase,
                               '=> Done for ', fi[:-4])
-                
+            # Plugs werden auch in Meter uebersetzt und dann aber direkt mit Appliances ergaenzt
             else:
                 #Meter number to be used in key
                 meter_num = int(fl) + 3
@@ -161,6 +161,7 @@ def convert_eco(dataset_loc, hdf_filename, timezone):
                     df = df.tz_convert(timezone)
                     df.columns.set_names(LEVEL_NAMES, inplace=True)
 
+                    # Check whether measurements removed
                     tmp_before = np.size(df.power.active)
                     df = df[df.power.active != -1]
                     tmp_after = np.size(df.power.active)
@@ -194,4 +195,17 @@ def convert_eco(dataset_loc, hdf_filename, timezone):
     convert_yaml_to_hdf5(meta_path, hdf_filename)
     print("Completed Metadata conversion.")
 
+
+def _get_module_directory():
+    # Taken from http://stackoverflow.com/a/6098238/732596
+    path_to_this_file = dirname(getfile(currentframe()))
+    if not isdir(path_to_this_file):
+        encoding = getfilesystemencoding()
+        path_to_this_file = dirname(unicode(__file__, encoding))
+    if not isdir(path_to_this_file):
+        abspath(getsourcefile(lambda _: None))
+    if not isdir(path_to_this_file):
+        path_to_this_file = getcwd()
+    assert isdir(path_to_this_file), path_to_this_file + ' is not a directory'
+    return path_to_this_file
 

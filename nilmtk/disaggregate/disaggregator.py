@@ -1,10 +1,26 @@
 from __future__ import print_function, division
 from datetime import datetime
 from nilmtk.timeframe import merge_timeframes, TimeFrame
+#from nilmtk.elecmeter import ElecMeter
+from nilmtk.processing import Processing
 
 
-class Disaggregator(object):
-    """Provides a common interface to all disaggregation classes.
+class DisaggregatorModel(object):
+    '''
+    This is the base class for all models of the disaggregator classes.
+    The models always contain the paramters and the model itself.
+    '''
+
+    # This dictionary shall be overwritten by each disaggregator with 
+    # fields for the parameters it requires.
+    params = {}
+
+
+
+class Disaggregator(Processing):
+    """ Provides the baseclass for all disaggregation classes.
+    Is further subdevided by the two subclasses SupervisedDisaggregtor 
+    and UnsupervisedDisaggregator.
 
     See https://github.com/nilmtk/nilmtk/issues/271 for discussion, and
     nilmtk/docs/manual/development_guide/writing_a_disaggregation_algorithm.md
@@ -21,35 +37,18 @@ class Disaggregator(object):
         Used by self._save_metadata_for_disaggregation.
     """
 
-    def train(self, metergroup):
-        """Trains the model given a metergroup containing appliance meters
-        (supervised) or a site meter (unsupervised).  Will have a
-        default implementation in super class.  Can be overridden for
-        simpler in-memory training, or more complex out-of-core
-        training.
 
-        Parameters
-        ----------
-        metergroup : a nilmtk.MeterGroup object
-        """
-        raise NotImplementedError()
-
-    def train_on_chunk(self, chunk, meter):
-        """Signature is fine for site meter dataframes (unsupervised
-        learning). Would need to be called for each appliance meter
-        along with appliance identifier for supervised learning.
-        Required to be overridden to provide out-of-core
-        disaggregation.
-
-        Parameters
-        ----------
-        chunk : pd.DataFrame where each column represents a
-            disaggregated appliance
-        meter : ElecMeter for this chunk
-        """
-        raise NotImplementedError()
-
-    def disaggregate(self, mains, output_datastore):
+    '''
+    This attribute declares which data is necessary to use the disaggregator.
+    Whenever a disaggregation or training is performed, the dataset is checked 
+    for the fullfillment of these requirements
+    '''
+    Requirements = {
+        'max_sample_period': 900,
+        'physical_quantities': [['power','active']]
+    }
+    
+    def disaggregate(self, mains, output_datastore = ""):
         """Passes each chunk from mains generator to disaggregate_chunk() and
         passes the output to _write_disaggregated_chunk_to_datastore()
         Will have a default implementation in super class.  Can be
@@ -79,19 +78,6 @@ class Disaggregator(object):
         """
         raise NotImplementedError()
 
-    def _pre_disaggregation_checks(self, load_kwargs):
-        if not self.model:
-            raise RuntimeError(
-                "The model needs to be instantiated before"
-                " calling `disaggregate`.  For example, the"
-                " model can be instantiated by running `train`.")
-
-        if 'resample_seconds' in load_kwargs:
-            DeprecationWarning("'resample_seconds' is deprecated."
-                               "  Please use 'sample_period' instead.")
-            load_kwargs['sample_period'] = load_kwargs.pop('resample_seconds')
-
-        return load_kwargs
 
     def _save_metadata_for_disaggregation(self, output_datastore,
                                           sample_period, measurement,
@@ -212,7 +198,7 @@ class Disaggregator(object):
                     appliance = {
                         'meters': [meter_instance],
                         'type': app.identifier.type,
-                        'instance': app.identifier.instance
+                        'instance': app.identifier.instance 
                         # TODO this `instance` will only be correct when the
                         # model is trained on the same house as it is tested on
                         # https://github.com/nilmtk/nilmtk/issues/194
@@ -248,32 +234,13 @@ class Disaggregator(object):
 
     def _write_disaggregated_chunk_to_datastore(self, chunk, datastore):
         """ Writes disaggregated chunk to NILMTK datastore.
-        Should not need to be overridden by sub-classes.
+        Should not need to be overridden by sub-classes. Only writes 
+        non zero sections to storage.
 
         Parameters
         ----------
         chunk : pd.DataFrame representing a single appliance
             (chunk needs to include metadata)
         datastore : nilmtk.DataStore
-        """
-        raise NotImplementedError()
-
-    def import_model(self, filename):
-        """Loads learned model from file.
-        Required to be overridden for learned models to persist.
-
-        Parameters
-        ----------
-        filename : str path to file to load model from
-        """
-        raise NotImplementedError()
-
-    def export_model(self, filename):
-        """Saves learned model to file.
-        Required to be overridden for learned models to persist.
-
-        Parameters
-        ----------
-        filename : str path to file to save model to
         """
         raise NotImplementedError()

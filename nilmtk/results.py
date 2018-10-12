@@ -13,7 +13,9 @@ class Results(object):
     objects contain a DataFrame, the index of which is the start timestamp for
     which the results are valid; the first column ('end') is the end
     timestamp for which the results are valid.  Other columns are accumulators 
-    for the results.
+    for the results. It is important to mention that apart from a simple 
+    result version, there is also the possibility that results are kept as 
+    class by passing 'full_results' into the pipeline.
 
     Attributes
     ----------
@@ -29,9 +31,9 @@ class Results(object):
     __metaclass__ = abc.ABCMeta
 
     def __init__(self):
-        self._data = pd.DataFrame(columns=['end'])
+        self._data = pd.DataFrame() #columns=['end']
 
-    def combined(self):
+    def finalize(self):
         """Return all results from each chunk combined.  Either return single
         float for all periods or a dict where necessary, e.g. if
         calculating Energy for a meter which records both apparent
@@ -46,17 +48,22 @@ class Results(object):
         """
         return copy.deepcopy(self._data)
 
-    def simple(self):
-        """Returns the simplest representation of the results."""
-        return self.combined()
+    #def simple(self):
+    #    """Returns the simplest representation of the results."""
+    #    return self.combined()
 
-    def append(self, timeframe, new_results):
-        """Append a single result.
-
+    def append(self, timeframe, new_results, check_overlap = True):
+        """Appends a new result coming from a new chunk.
+        Usually each chunk has one bunch of results and that
+        one is appended by taking the timeframe of the chunk
+        as the timeframe parameter.
+        
         Parameters
         ----------
         timeframe : nilmtk.TimeFrame
         new_results : dict
+        check_overlap : Set to False if to accelerate. 
+                        Useful when calculating statistics where you know it is in order either way.
         """
         if not isinstance(timeframe, TimeFrame):
             raise TypeError("`timeframe` must be of type 'nilmtk.TimeFrame',"
@@ -66,9 +73,10 @@ class Results(object):
                             .format(type(new_results)))
         
         # check that there is no overlap
-        for index, series in self._data.iterrows():
-            tf = TimeFrame(index, series['end'])
-            tf.check_for_overlap(timeframe)
+        if check_overlap:
+            for index, series in self._data.iterrows():
+                tf = TimeFrame(index, series['end'])
+                tf.check_for_overlap(timeframe)
 
         row = pd.DataFrame(index=[timeframe.start],
                            columns=['end'] + list(new_results))
@@ -79,6 +87,7 @@ class Results(object):
         self._data.sort_index(inplace=True)
 
     def check_for_overlap(self):
+        pass
         # TODO this could be made much faster
         n = len(self._data)
         index = self._data.index
@@ -91,13 +100,18 @@ class Results(object):
                 tf1.check_for_overlap(tf2)
 
     def update(self, new_result):
-        """Add results from a new chunk.
+        """ Add results from a new chunk. This adds a whole 
+        result element.
         
         Parameters 
         ---------- 
         new_result : Results subclass (same
             class as self) from new chunk of data.
 
+        See Also
+        --------
+        node
+        folder stats
         """
         if not isinstance(new_result, self.__class__):
             raise TypeError("new_results must be of type '{}'"
@@ -131,6 +145,9 @@ class Results(object):
 
     def import_from_cache(self, cached_stat, sections):
         """
+        Converts the data from the cache back into the original 
+        data form used during runtime.
+
         Parameters
         ----------
         cached_stat : DataFrame of cached data
@@ -172,7 +189,8 @@ class Results(object):
 
     def export_to_cache(self):
         """
-        Returns
+        Returns the contained data in a form, that can be 
+        stored in the cache.
         -------
         pd.DataFrame
 
@@ -203,4 +221,7 @@ class Results(object):
         return cols
 
     def __repr__(self):
+        '''
+        When printed, the results only show their data.
+        '''
         return str(self._data)

@@ -1,35 +1,35 @@
 from __future__ import print_function, division
-import networkx as nx
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
-from datetime import timedelta
-from warnings import warn
-from sys import stdout
-from collections import Counter
-from copy import copy, deepcopy
+
 import gc
+import time
+from collections import Counter
 from collections import namedtuple
-from six import iteritems, integer_types
+from copy import copy, deepcopy
+from datetime import timedelta
+from sys import stdout
+from warnings import warn
+
+import matplotlib.pyplot as plt
+import networkx as nx
+import numpy as np
+import pandas as pd
+from matplotlib.ticker import FuncFormatter
+from six import iteritems
+
+from nilmtk.timeframegroup import TimeFrameGroup
+from .appliance import Appliance
+from .datastore import MAX_MEM_ALLOWANCE_IN_BYTES
 
 # NILMTK imports
 from .elecmeter import ElecMeter, ElecMeterID
-from .appliance import Appliance
-from .datastore.datastore import join_key
-from .utils import (tree_root, nodes_adjacent_to_root, simplest_type_for,
-                    flatten_2d_list, convert_to_timestamp, normalise_timestamp,
+from .electric import Electric
+from .measurement import (AC_TYPES, LEVEL_NAMES,
+                          PHYSICAL_QUANTITIES_TO_AVERAGE)
+from .timeframe import split_timeframes
+from .utils import (nodes_adjacent_to_root, simplest_type_for,
+                    flatten_2d_list, normalise_timestamp,
                     print_on_line, convert_to_list, append_or_extend_list,
                     most_common, capitalise_first_letter)
-from .plots import plot_series
-from .measurement import (select_best_ac_type, AC_TYPES, LEVEL_NAMES,
-                          PHYSICAL_QUANTITIES_TO_AVERAGE)
-from nilmtk.exceptions import MeasurementError
-from .electric import Electric
-from .timeframe import TimeFrame, split_timeframes
-from .preprocessing import Apply
-from .datastore import MAX_MEM_ALLOWANCE_IN_BYTES
-from nilmtk.timeframegroup import TimeFrameGroup
 
 # MeterGroupID.meters is a tuple of ElecMeterIDs.  Order doesn't matter.
 # (we can't use a set because sets aren't hashable so we can't use 
@@ -40,7 +40,7 @@ class MeterGroup(Electric):
 
     """A group of ElecMeter objects. Can contain nested MeterGroup objects.
 
-    Implements many of the same methods as ElecMeter.
+    Implements many of the same methods as ElecMeter. 
 
     Attributes
     ----------
@@ -63,6 +63,8 @@ class MeterGroup(Electric):
 
     def import_metadata(self, store, elec_meters, appliances, building_id):
         """
+        Import metadata. Called during startup.
+
         Parameters
         ----------
         store : nilmtk.DataStore
@@ -130,8 +132,31 @@ class MeterGroup(Electric):
                              if isinstance(m, ElecMeter) 
                              and m.metadata.get('disabled')]
         for meter in meters_to_disable:
-            self.meters.remove(meter)
-            self.disabled_meters.append(meter)
+            self.disable_meter(meter)
+
+    def disable_meter(self, meter):
+        '''
+        This function adds a certain meter to the disabled meters.
+        '''
+        self.meters.remove(meter)
+        self.disabled_meters.append(meter)
+        
+    def enable_meter(self, meter):
+        '''
+        This function adds a certain meter to the disabled meters.
+        '''
+        self.meters.append(meter)
+        self.disabled_meters.remove(meter)
+
+        
+    def add(self, meter):
+        """
+        Adds a new meter to the metergroup.
+        """
+        if not isinstance(meter, ElecMeter):
+            raise TypeError()
+        return self.meters.append(meter)
+    
 
     def union(self, other):
         """
@@ -143,7 +168,7 @@ class MeterGroup(Electric):
         if not isinstance(other, MeterGroup):
             raise TypeError()
         return MeterGroup(set(self.meters).union(other.meters))
-
+    
     def dominant_appliance(self):
         dominant_appliances = [meter.dominant_appliance()
                                for meter in self.meters]
@@ -166,6 +191,8 @@ class MeterGroup(Electric):
 
     def nested_metergroups(self):
         return [m for m in self.meters if isinstance(m, MeterGroup)]
+
+    #region SELECTION
 
     def __getitem__(self, key):
         """Get a single meter using appliance type and instance unless
@@ -299,7 +326,7 @@ class MeterGroup(Electric):
                 return True
         return False
 
-    def select(self, **kwargs):
+    def select(self, **select_kwargs): #elecmeters_only = False,
         """Select a group of meters based on meter metadata.
 
         e.g.
@@ -347,17 +374,31 @@ class MeterGroup(Electric):
         * see Pandas.eval(): 
           * http://pandas.pydata.org/pandas-docs/stable/indexing.html#the-query-method-experimental
           * https://github.com/pydata/pandas/blob/master/pandas/computation/eval.py#L119
+
+        Parameters:
+        # elecmeters_only: bool
+        #   When set to true, only the contained atomar elecmeters are returned.
+        # Todo: Think about whether it might be necessary to allow exclusion of checking the building metadata. I added this check.
+        # include_buildings_in_check: bool
+        #    Wheather the meters' corresponding building is also checked.
+        # 
         """
         selected_meters = []
-        func = kwargs.pop('func', 'matches')
+        func = select_kwargs.pop('func', 'matches') # Second one is the default
 
-        def get(_kwargs):
+        def get(select_kwarg):
             exception_raised_every_time = True
             exception = None
             no_match = True
-            for meter in self.meters:
+            
+            if 'elecmeters_only' in select_kwarg and select_kwarg['elecmeters_only']:
+                meters = self.all_elecmeters()
+                select_kwarg.pop('elecmeters_only')
+            else:
+                meters = self.meters
+            for meter in meters:
                 try:
-                    match = getattr(meter, func)(_kwargs)
+                    match = getattr(meter, func)(select_kwarg)
                 except KeyError as e:
                     exception = e
                 else:
@@ -366,21 +407,21 @@ class MeterGroup(Electric):
                         selected_meters.append(meter)
                         no_match = False
             if no_match:
-                raise KeyError("'No match for {}'".format(_kwargs))
+                raise KeyError("'No match for {}'".format(select_kwarg))
             if exception_raised_every_time and exception is not None:
                 raise exception
 
-        if len(kwargs) == 1 and isinstance(next(iter(kwargs.values())), list):
-            attribute = next(iter(kwargs.keys()))
-            list_of_values = next(iter(kwargs.values()))
+        if len(select_kwargs) == 1 and isinstance(next(iter(select_kwargs.values())), list):
+            attribute = next(iter(select_kwargs.keys()))
+            list_of_values = next(iter(select_kwargs.values()))
             for value in list_of_values:
                 get({attribute: value})
         else:
-            get(kwargs)
+            get(select_kwargs)
 
         return MeterGroup(selected_meters)
 
-    def select_using_appliances(self, **kwargs):
+    def select_using_appliances(self, **select_kwargs):
         """Select a group of meters based on appliance metadata.
 
         e.g. 
@@ -396,10 +437,18 @@ class MeterGroup(Electric):
         -------
         new MeterGroup of selected meters.
         """
-        return self.select(func='matches_appliances', **kwargs)
+        select_kwargs['func'] = 'matches_appliances'
+        return self.select(**select_kwargs)
+    
+    #endregion
+
+    #region SPECIAL CONSTUCTORS
 
     def from_list(self, meter_ids):
         """
+        Creates a metagroup from a list of meter_ids contained in 
+        this metergroup.
+
         Parameters
         ----------
         meter_ids : list or tuple
@@ -466,6 +515,9 @@ class MeterGroup(Electric):
         metergroup.from_list(new_identifiers)
         return metergroup
 
+    #endregion
+
+
     def __eq__(self, other):
         if isinstance(other, MeterGroup):
             return set(other.meters) == set(self.meters)
@@ -474,6 +526,14 @@ class MeterGroup(Electric):
 
     def __ne__(self, other):
         return not self.__eq__(other)
+
+    def __hash__(self):
+        '''
+        Has to be redefined in Python 3 since the definition of 
+        __eq__ makes the hash function disappear.
+        '''
+        return hash(self.identifier)
+
 
     @property
     def appliances(self):
@@ -485,7 +545,9 @@ class MeterGroup(Electric):
     def dominant_appliances(self):
         appliances = set()
         for meter in self.meters:
-            appliances.add(meter.dominant_appliance())
+            dominants = meter.dominant_appliance()
+            if not dominants is None:
+                appliances.add(dominants)
         return list(appliances)
 
     def values_for_appliance_metadata_key(self, key, 
@@ -512,6 +574,25 @@ class MeterGroup(Electric):
             value = appliance.type.get(key)
             append_or_extend_list(values, value)
         return list(set(values))
+    
+
+    def values_for_meter_or_building_metadata_key(self, key):
+        """
+        Parameters
+        ----------
+        key : str
+            e.g. 'zip'
+        
+        Returns
+        -------
+        list
+        """
+    
+        values = []
+        for meter in self.meters:
+            append_or_extend_list(values, 
+                meter.values_for_meter_or_building_metadata_key(key))
+        return list(set(values))
 
     def get_labels(self, meter_ids, pretty=True):
         """Create human-readable meter labels.
@@ -537,7 +618,7 @@ class MeterGroup(Electric):
 
     @property
     def identifier(self):
-        """Returns a MeterGroupID."""
+        """Returns the MeterGroupID for this MeterGroup."""
         return MeterGroupID(meters=tuple([meter.identifier for meter in self.meters]))
 
     def instance(self):
@@ -603,8 +684,8 @@ class MeterGroup(Electric):
             pos = nx.shell_layout(graph)
             used_graphviz = False
             
-        meter_labels = {meter: meter.label() for meter in graph.nodes()}
         if show_meter_labels:
+            meter_labels = {meter: meter.label() for meter in graph.nodes()}
             for meter, name in iteritems(meter_labels):
                 x, y = pos[meter]
 
@@ -621,11 +702,11 @@ class MeterGroup(Electric):
         
         return graph, ax
 
-    def load(self, **kwargs):
+    def load(self, **load_kwargs):
         """Returns a generator of DataFrames loaded from the DataStore.
 
         By default, `load` will load all available columns from the DataStore.  
-        Specific columns can be selected in one or two mutually exclusive ways:
+        Specific columns can be selected in one of two mutually exclusive ways:
 
         1. specify a list of column names using the `columns` parameter.
         2. specify a `physical_quantity` and/or an `ac_type` parameter to ask 
@@ -646,7 +727,7 @@ class MeterGroup(Electric):
             the maximum number of rows per chunk. Note that each chunk is 
             guaranteed to be of length <= chunksize.  Each chunk is *not*
             guaranteed to be exactly of length == chunksize.
-        **kwargs : 
+        **load_kwargs : 
             any other key word arguments to pass to `self.store.load()` including:
         physical_quantity : string or list of strings
             e.g. 'power' or 'voltage' or 'energy' or ['power', 'energy'].
@@ -677,15 +758,22 @@ class MeterGroup(Electric):
         .. note:: Different AC types will be treated separately.
         """
         # Handle kwargs
-        sample_period = kwargs.setdefault('sample_period', self.sample_period())
-        sections = kwargs.pop('sections', [self.get_timeframe()])
-        chunksize = kwargs.pop('chunksize', MAX_MEM_ALLOWANCE_IN_BYTES)
-        duration_threshold = sample_period * chunksize
+        if self.sample_period() == 0:
+            load_kwargs["high_res"] = True
+            #if not 'sample_period' in load_kwargs:
+        load_kwargs.setdefault('sample_period', 1)
+        sample_period = load_kwargs['sample_period']
+        #sample_period = load_kwargs.setdefault('sample_period', self.sample_period())
+
+        sections = load_kwargs.pop('sections', [self.get_timeframe()])
+        chunksize = load_kwargs.pop('chunksize', MAX_MEM_ALLOWANCE_IN_BYTES)
+        
+        duration_threshold = chunksize * sample_period
         columns = pd.MultiIndex.from_tuples(
-            self._convert_physical_quantity_and_ac_type_to_cols(**kwargs)['columns'],
+            self._convert_physical_quantity_and_ac_type_to_cols(**load_kwargs)['columns'],
             names=LEVEL_NAMES)
         freq = '{:d}S'.format(int(sample_period))
-        verbose = kwargs.get('verbose')
+        verbose = load_kwargs.get('verbose')
 
         # Check for empty sections
         sections = [section for section in sections if section]
@@ -696,35 +784,43 @@ class MeterGroup(Electric):
 
         # Loop through each section to load
         for section in split_timeframes(sections, duration_threshold):
-            kwargs['sections'] = [section]
+            load_kwargs['sections'] = [section]
             start = normalise_timestamp(section.start, freq)
-            tz = None if start.tz is None else start.tz.zone
+            tz = None if start.tz is None else start.tz.zone 
+            #tz = self.get_timeframe().start.tz                      # WIEDER EINKOMMENTIERT!!!
             index = pd.date_range(
-                start.tz_localize(None), section.end.tz_localize(None), tz=tz,
+                start, section.end, tz=tz,
                 closed='left', freq=freq)
             chunk = combine_chunks_from_generators(
-                index, columns, self.meters, kwargs)
+                index, columns, self.meters, load_kwargs)
             yield chunk
 
-    def _convert_physical_quantity_and_ac_type_to_cols(self, **kwargs):
+    def _convert_physical_quantity_and_ac_type_to_cols(self, ignore_missing_columns = False, **load_kwargs):
         all_columns = set()
-        kwargs = deepcopy(kwargs)
+        load_kwargs = deepcopy(load_kwargs)
         for meter in self.meters:
-            kwargs_copy = deepcopy(kwargs)
-            new_kwargs = meter._convert_physical_quantity_and_ac_type_to_cols(**kwargs_copy)
-            columns = new_kwargs.get('columns', [])
-            for col in columns:
-                all_columns.add(col)
-        kwargs['columns'] = list(all_columns)
-        return kwargs
+            load_kwargs_copy = deepcopy(load_kwargs)
+            try:
+                new_kwargs = meter._convert_physical_quantity_and_ac_type_to_cols(ignore_missing_columns = ignore_missing_columns, **load_kwargs_copy)
+            except Exception as e:
+                if ignore_missing_columns:
+                    continue
+                else:
+                   raise e
 
-    def _meter_generators(self, **kwargs):
+            cols = new_kwargs.get('columns', [])
+            for col in cols:
+                all_columns.add(col)
+        load_kwargs['columns'] = list(all_columns)
+        return load_kwargs
+
+    def _meter_generators(self, **load_kwargs):
         """Returns (list of identifiers, list of generators)."""
         generators = []
         identifiers = []
         for meter in self.meters:
-            kwargs_copy = deepcopy(kwargs)
-            generator = meter.load(**kwargs_copy)
+            load_kwargs_copy = deepcopy(load_kwargs)
+            generator = meter.load(**load_kwargs_copy)
             generators.append(generator)
             identifiers.append(meter.identifier)
 
@@ -760,7 +856,8 @@ class MeterGroup(Electric):
 
     def mains(self):
         """
-        Returns
+        Returns the site meters within the 
+        metergroup.
         -------
         ElecMeter or MeterGroup or None
         """
@@ -818,6 +915,12 @@ class MeterGroup(Electric):
         submeters = [meter for meter in self.meters
                      if not meter.is_site_meter()]
         return MeterGroup(submeters)
+       
+    def sitemeters(self):
+        """Returns new MeterGroup with only the site_meters included"""
+        submeters = [meter for meter in self.meters
+                     if meter.is_site_meter()]
+        return MeterGroup(submeters)
 
     def is_site_meter(self):
         """Returns True if any meters are site meters"""
@@ -855,8 +958,14 @@ class MeterGroup(Electric):
                 else:
                     total_energy_results += meter_energy
             return total_energy_results
+        else:
+            return 0
 
     def _collect_stats_on_all_meters(self, load_kwargs, func, full_results):
+        '''
+        This helpfunction calculates a certain statistic defined by func for all
+        meters included in the set.
+        '''
         collected_stats = []
         for meter in self.meters:
             print_on_line("\rCalculating", func, "for", meter.identifier, "...   ")
@@ -911,22 +1020,34 @@ class MeterGroup(Electric):
                                " different periods and hence"
                                " cannot be unified.")
 
-    def good_sections(self, **kwargs):
-        """Returns good sections for just the first meter.
-
-        TODO: combine good sections from every meter.
+    def good_sections(self, **load_kwargs):
+        """Returns the intersection of the good sections of all
+        contained meters.
         """
         if self.meters:
-            if len(self.meters) > 1:
-                warn("As a quick implementation we only get Good Sections from"
-                     " the first meter in the meter group.  We should really"
-                     " return the intersection of the good sections for all"
-                     " meters.  This will be fixed...")
-            return self.meters[0].good_sections(**kwargs)
+            good_sections = [TimeFrameGroup([self.get_timeframe()])]
+            for meter in self.meters:
+                good_sections.append(meter.good_sections())
+            good_sections = TimeFrameGroup.intersect_many(good_sections)
+            return good_sections
         else:
-            return []
+            return TimeFrameGroup()
 
-    def dataframe_of_meters(self, **kwargs):
+    def overbasepower_sections(self, **load_kwargs):
+        """Returns union of overbaseload sections for all contained meters.
+        So the overall sections above baseload.
+
+        """
+        if self.meters:
+            abovebaseload_sections = []#TimeFrameGroup([self.get_timeframe()])] TODO: Why was it like this?
+            for meter in self.meters:
+                abovebaseload_sections.append(meter.overbasepower_sections())
+            abovebaseload_sections = TimeFrameGroup.union_many(abovebaseload_sections)
+            return abovebaseload_sections
+        else:
+            return TimeFrameGroup()
+
+    def dataframe_of_meters(self, **load_kwargs):
         """
         Parameters
         ----------
@@ -935,7 +1056,7 @@ class MeterGroup(Electric):
             If not specified then will use the max of all meters' sample_periods.
         resample : bool, defaults to True
             If True then resample to `sample_period`.
-        **kwargs : 
+        **load_kwargs : 
             any other key word arguments to pass to `self.store.load()` including:
         ac_type : string, defaults to 'best'
         physical_quantity: string, defaults to 'power'
@@ -945,10 +1066,10 @@ class MeterGroup(Electric):
         DataFrame
             Each column is a meter.
         """
-        kwargs.setdefault('sample_period', self.sample_period())
-        kwargs.setdefault('ac_type', 'best')
-        kwargs.setdefault('physical_quantity', 'power')
-        identifiers, generators = self._meter_generators(**kwargs)
+        load_kwargs.setdefault('sample_period', self.sample_period())
+        load_kwargs.setdefault('ac_type', 'best')
+        load_kwargs.setdefault('physical_quantity', 'power')
+        identifiers, generators = self._meter_generators(**load_kwargs)
         segments = []
         while True:
             chunks = []
@@ -1007,7 +1128,8 @@ class MeterGroup(Electric):
         """
         Calls `method` on all pairs in `self.meters`.
 
-        Assumes `method` is symmetrical.
+        Assumes `method` is symmetrical, sothat it is only called once for 
+        all meters.
 
         Parameters
         ----------
@@ -1054,7 +1176,7 @@ class MeterGroup(Electric):
         """
         return self.pairwise('correlation')
 
-    def proportion_of_energy_submetered(self, **loader_kwargs):
+    def proportion_of_energy_submetered(self, **load_kwargs):
         """
         Returns
         -------
@@ -1064,12 +1186,12 @@ class MeterGroup(Electric):
         mains = self.mains()
         downstream_meters = self.meters_directly_downstream_of_mains()
         proportion = 0.0
-        verbose = loader_kwargs.get('verbose')
+        verbose = load_kwargs.get('verbose')
         all_nan = True
         for m in downstream_meters.meters:
             if verbose:
                 print("Calculating proportion for", m)
-            prop = m.proportion_of_energy(mains, **loader_kwargs)
+            prop = m.proportion_of_energy(mains, **load_kwargs)
             if not np.isnan(prop):
                 proportion += prop
                 all_nan = False
@@ -1162,7 +1284,7 @@ class MeterGroup(Electric):
         return energy_per_meter
 
     def _energy_per_meter_with_remainder(self, energy_per_meter,
-                                         mains, per_period, **kwargs):
+                                         mains, per_period, **load_kwargs):
         ac_types = energy_per_meter.keys()
         energy_per_meter = energy_per_meter.sum() # Collapse AC_TYPEs into Series
 
@@ -1176,12 +1298,12 @@ class MeterGroup(Electric):
             mains_ac_type = 'best'
 
         # Get mains energy_per_meter
-        kwargs['ac_type'] = mains_ac_type
+        load_kwargs['ac_type'] = mains_ac_type
         if per_period is None:
-            mains_energy = mains.total_energy(**kwargs)
+            mains_energy = mains.total_energy(**load_kwargs)
         else:
             mains_energy = mains.average_energy_per_period(
-                offset_alias=per_period, **kwargs)
+                offset_alias=per_period, **load_kwargs)
         mains_energy = mains_energy[mains_energy.keys()[0]]
 
         # Calculate remainder
@@ -1213,6 +1335,9 @@ class MeterGroup(Electric):
 
     def train_test_split(self, train_fraction=0.5):
         """
+        This function returns the timestamp which is advisable for splitting the load profile
+        into training and testing dataset.
+
         Parameters
         ----------
         train_fraction
@@ -1222,11 +1347,10 @@ class MeterGroup(Electric):
         split_time: pd.Timestamp where split should happen
         """
 
-        assert(
-            0 < train_fraction < 1), "`train_fraction` should be between 0 and 1"
+        assert(0 < train_fraction < 1), "`train_fraction` should be between 0 and 1"
 
         # TODO: currently just works with the first mains meter, assuming
-        # both to be simultaneosly sampled
+        # all to be simultaneosly sampled
 
         mains = self.mains()
         good_sections = self.mains().good_sections()
@@ -1287,7 +1411,7 @@ class MeterGroup(Electric):
     # def on_off_events(self, minimum_state_duration):
     #     raise NotImplementedError
 
-    def select_top_k(self, k=5, by="energy", asc=False, group_remainder=False, **kwargs):
+    def select_top_k(self, k=5, by="energy", asc=False, group_remainder=False, **load_kwargs):
         """Only select the top K meters, according to energy.
 
         Functions on the entire MeterGroup.  So if you mean to select
@@ -1309,21 +1433,16 @@ class MeterGroup(Electric):
         group_remainder : bool, optional, defaults to False
             If True then place all remaining meters into a 
             nested metergroup.
-        **kwargs : key word arguments to pass to load()
+        **load_kwargs : key word arguments to pass to load()
 
         Returns
         -------
         MeterGroup
         """
         function_map = {'energy': self.fraction_per_meter, 'entropy': self.entropy_per_meter}
-        top_k_series = function_map[by](**kwargs)
-        top_k_series.sort_values(inplace=True, ascending=asc)
-        top_k_elec_meter_ids = list(top_k_series[:k].index)
-        
-        #TODO: investigate the root cause for missing namedtuple type, remove this workaround
-        if top_k_elec_meter_ids and type(top_k_elec_meter_ids[0]) is tuple and len(top_k_elec_meter_ids[0]) == 3:
-            top_k_elec_meter_ids = [ElecMeterID(*key) for key in top_k_elec_meter_ids]
-        
+        top_k_series = function_map[by](**load_kwargs)
+        top_k_series.sort_values(ascending=asc)
+        top_k_elec_meter_ids = top_k_series[:k].index
         top_k_metergroup = self.from_list(top_k_elec_meter_ids)
 
         if group_remainder:
@@ -1336,28 +1455,38 @@ class MeterGroup(Electric):
             top_k_metergroup.meters.append(remainder_metergroup)
         return top_k_metergroup
 
-    def groupby(self, key, use_appliance_metadata=True, **kwargs):
+    def groupby(self, key, use_appliance_metadata=True):
         """
+        Groups the meters by either attributes of the connected 
+        appliances or attributes belonging to the meter and its 
+        house itself.
         e.g. groupby('category')
 
         Returns
         -------
         MeterGroup of nested MeterGroups: one per group
         """
-        if not use_appliance_metadata:
-            raise NotImplementedError()
-
-        values = self.values_for_appliance_metadata_key(key)
-        groups = []
+        if use_appliance_metadata:
+           values = self.values_for_appliance_metadata_key(key)
+        else:
+           values = self.values_for_meter_or_building_metadata_key(key)
+           
+        groups =  {}
         for value in values:
-            group = self.select_using_appliances(**{key: value})
+            group = self.select(elecmeters_only = True, **{key: value})
             group.name = value
-            groups.append(group)
+            groups[value] = group
 
-        return MeterGroup(groups)
+        return groups
+        #return MeterGroup(groups)
 
-    def get_timeframe(self):
+    def get_timeframe(self, intersection_instead_union=True):
         """
+        -------
+        Paramters
+        intersection_instead_union bool: When set to true only the timeframe which is valid for all contained 
+        meters is taken.
+
         Returns
         -------
         nilmtk.TimeFrame representing the timeframe which is the union
@@ -1370,10 +1499,13 @@ class MeterGroup(Electric):
             elif meter.get_timeframe().empty:
                 pass
             else:
-                timeframe = timeframe.union(meter.get_timeframe())
+                if intersection_instead_union:
+                    timeframe = timeframe.intersection(meter.get_timeframe())
+                else:
+                    timeframe = timeframe.union(meter.get_timeframe())
         return timeframe
 
-    def plot(self, kind='separate lines', **kwargs):
+    def plot(self, kind='separate lines', **plot_kwargs):
         """
         Parameters
         ----------
@@ -1395,18 +1527,18 @@ class MeterGroup(Electric):
             'energy bar': self._plot_energy_bar
         }
         try:
-            ax = function_map[kind](**kwargs)
+            ax = function_map[kind](**plot_kwargs)
         except KeyError:
             raise ValueError("'{}' not a valid setting for 'kind' parameter."
                              .format(kind))
         return ax
 
-    def _plot_separate_lines(self, ax=None, plot_legend=True, **kwargs):
+    def _plot_separate_lines(self, ax=None, plot_legend=True, **plot_kwargs):
         for meter in self.meters:
             if isinstance(meter, MeterGroup):
-                ax = meter.plot(ax=ax, plot_legend=False, kind='sum', **kwargs)
+                ax = meter.plot(ax=ax, plot_legend=False, kind='sum', **plot_kwargs)
             else:
-                ax = meter.plot(ax=ax, plot_legend=False, **kwargs)
+                ax = meter.plot(ax=ax, plot_legend=False, **plot_kwargs)
         if plot_legend:
             plt.legend()
         return ax
@@ -1467,7 +1599,8 @@ class MeterGroup(Electric):
             return ax
 
         load_kwargs['sections'] = [timeframe]
-        load_kwargs = self._set_sample_period(timeframe, **load_kwargs)
+        if not 'sample_period' in load_kwargs:
+            load_kwargs = self._set_sample_period(timeframe, **load_kwargs)
         df = self.dataframe_of_meters(**load_kwargs)
 
         if threshold is not None:
@@ -1504,6 +1637,8 @@ class MeterGroup(Electric):
                            include_disabled_meters=True, load_kwargs=None,
                            **plot_kwargs):
         """
+        Only defined in metergroup and not elecmeter because called from the dataset and 
+        that has always metergroups, one for each building.
         Parameters
         ----------
         label_func : str or None
@@ -1587,7 +1722,7 @@ class MeterGroup(Electric):
         return ax
 
     def plot_multiple(self, axes, meter_keys, plot_func, 
-                      kwargs_per_meter=None, pretty_label=True, **kwargs):
+                      plot_kwargs_per_meter=None, pretty_label=True, **plot_kwargs):
         """Create multiple subplots.
 
         Parameters
@@ -1607,7 +1742,7 @@ class MeterGroup(Electric):
             this parameter for each meter. 
             e.g. {'range': [(0,100), (0,200)]}
         pretty_label : bool
-        **kwargs : any key word arguments to pass the same values to the
+        **plot_kwargs : any key word arguments to pass the same values to the
            plot func for every meter.
 
         Returns
@@ -1618,15 +1753,15 @@ class MeterGroup(Electric):
         if len(axes) != len(meter_keys):
             raise ValueError("`axes` and `meters` must be of equal length.")
 
-        if kwargs_per_meter is None:
-            kwargs_per_meter = {}
+        if plot_kwargs_per_meter is None:
+            plot_kwargs_per_meter = {}
 
         meters = [self[meter_key] for meter_key in meter_keys]
         for i, (ax, meter) in enumerate(zip(axes, meters)):
-            kwargs_copy = deepcopy(kwargs)
-            for parameter, arguments in iteritems(kwargs_per_meter):
-                kwargs_copy[parameter] = arguments[i]
-            getattr(meter, plot_func)(ax=ax, **kwargs_copy)
+            plot_kwargs_copy = deepcopy(plot_kwargs)
+            for parameter, arguments in iteritems(plot_kwargs_per_meter):
+                plot_kwargs_copy[parameter] = arguments[i]
+            getattr(meter, plot_func)(ax=ax, **plot_kwargs_copy)
             ax.set_title(meter.label(pretty=pretty_label))
 
         return axes
@@ -1635,18 +1770,44 @@ class MeterGroup(Electric):
         """Sorts meters by instance."""
         self.meters.sort(key=meter_sorting_key)
 
-    def label(self, **kwargs):
+    def label(self, **label_kwargs):
         """
+        label_kwargs: At the moment only flag 'pretty' is supported, which 
+        capitalises first letter.
+
         Returns
         -------
         string : A label listing all the appliance types.
         """
         if self.name:
             label = self.name
-            if kwargs.get('pretty'):
+            if label_kwargs.get('pretty'):
                 label = capitalise_first_letter(label)
             return label
-        return ", ".join(set([meter.label(**kwargs) for meter in self.meters]))
+        return ", ".join(set([meter.label(**label_kwargs) for meter in self.meters]))
+    
+    def calc_and_cache_stats(self, ignore_meters = None, verbose = False):
+        '''
+        This functon calculates all available statistics for for all available
+        meters sothat they are stored in the cache and can be accessed 
+        without delay in the future.
+        '''
+        
+        meter = self.meters[0]
+        original_name = meter.building_metadata['original_name'] 
+        if not ignore_meters is None and (original_name in ignore_meters):
+            if verbose:
+                print("Skipped " + str(meter))
+            return
+
+        if verbose:
+            t1 = time.time()
+        for meter in self.meters:
+            meter.calc_and_cache_stats(verbose)
+        if verbose:
+            t2 = time.time()
+            print(str(meter) + ":" + str(t2 - t1) + 'sec')
+            t1 = t2
 
     def clear_cache(self):
         """Clear cache on all meters in this MeterGroup."""
@@ -1662,7 +1823,16 @@ class MeterGroup(Electric):
         """Returns a list of self.meters + self.disabled_meters."""
         return self.meters + self.disabled_meters
 
-    def describe(self, compute_expensive_stats=True, **kwargs):
+    def all_elecmeters(self):
+        resultmeters = []
+        for i, meter in enumerate(self.all_meters()):
+            if type(meter) is MeterGroup:
+                resultmeters.extend(MeterGroup.all_elecmeters(meter))
+            else:
+                resultmeters.append(meter)
+        return resultmeters
+
+    def describe(self, compute_expensive_stats=True, **load_kwargs):
         """Returns pd.Series describing this MeterGroup."""
         series = pd.Series()
 
@@ -1672,11 +1842,11 @@ class MeterGroup(Electric):
         series['total_n_site_meters'] = len(site_meters)
         if compute_expensive_stats:
             series['correlation_of_sum_of_submeters_with_mains'] = (
-                self.correlation_of_sum_of_submeters_with_mains(**kwargs))
+                self.correlation_of_sum_of_submeters_with_mains(**load_kwargs))
             series['proportion_of_energy_submetered'] = (
-                self.proportion_of_energy_submetered(**kwargs))
+                self.proportion_of_energy_submetered(**load_kwargs))
             dropout_rates = self._collect_stats_on_all_meters(
-                kwargs, 'dropout_rate', False)
+                load_kwargs, 'dropout_rate', False)
             dropout_rates = np.array(dropout_rates)
             series['dropout_rates_ignoring_gaps'] = (
                 "min={}, mean={}, max={}".format(
@@ -1689,7 +1859,7 @@ class MeterGroup(Electric):
         timeframe = self.get_timeframe()
         series['timeframe'] = "start={}, end={}".format(timeframe.start, timeframe.end)
         series['total_duration'] = str(timeframe.timedelta)
-        mains_uptime = self.mains().uptime(**kwargs)
+        mains_uptime = self.mains().uptime(**load_kwargs)
         series['mains_uptime'] = str(mains_uptime)
         try:
             series['proportion_uptime'] = (mains_uptime.total_seconds() /
@@ -1700,6 +1870,8 @@ class MeterGroup(Electric):
 
         return series
 
+    def __len__(self):
+        return len(self.meters)
 
 def replace_dataset(identifier, dataset):
     """
@@ -1724,6 +1896,10 @@ def replace_dataset(identifier, dataset):
 
 def iterate_through_submeters_of_two_metergroups(master, slave):
     """
+    Finds the corresponding meters in the two metergroups by their IDs
+    and by replacing the dataset in them. 
+    So to pair to meters, one has to give them the same ID!
+
     Parameters
     ----------
     master, slave : MeterGroup
@@ -1740,7 +1916,7 @@ def iterate_through_submeters_of_two_metergroups(master, slave):
     return zipped
 
 
-def combine_chunks_from_generators(index, columns, meters, kwargs):
+def combine_chunks_from_generators(index, columns, meters, load_kwargs):
     """Combines chunks into a single DataFrame.
 
     Adds or averages columns, depending on whether each column is in
@@ -1771,16 +1947,17 @@ def combine_chunks_from_generators(index, columns, meters, kwargs):
 
     # Go through each generator to try sum values together
     for meter in meters:
+        # Load the data
         print_on_line("\rLoading data for meter", meter.identifier, "    ")
-        kwargs_copy = deepcopy(kwargs)
-        generator = meter.load(**kwargs_copy)
+        load_kwargs_copy = deepcopy(load_kwargs)
+        generator = meter.load(**load_kwargs_copy)
         try:
             chunk_from_next_meter = next(generator)
         except StopIteration:
             continue
 
         del generator
-        del kwargs_copy
+        del load_kwargs_copy
         gc.collect()
 
         if chunk_from_next_meter.empty or not chunk_from_next_meter.timeframe:
@@ -1798,11 +1975,11 @@ def combine_chunks_from_generators(index, columns, meters, kwargs):
             except KeyError:
                 continue
 
-            aligned = column.reindex(index, copy=False).values
+            aligned = column.reindex(index, copy=False).values.astype('float32')
             del column
-            cumulator_col = cumulator_arr[:,i]
+            cumulator_col = cumulator_arr[:,i] # Call by reference
             where_both_are_nan = np.isnan(cumulator_col) & np.isnan(aligned)
-            np.nansum([cumulator_col, aligned], axis=0, out=cumulator_col, 
+            np.nansum([cumulator_col, aligned], axis=0, out=cumulator_col,  # HIER IN DER FUNKTION WIRD ADDIERT UND DIE SPALTE GESETZT 
                       dtype=DTYPE)
             cumulator_col[where_both_are_nan] = np.NaN
             del aligned
@@ -1834,7 +2011,6 @@ def combine_chunks_from_generators(index, columns, meters, kwargs):
 
     del columns_to_average_counter
     gc.collect()
-    print()
     print("Done loading data all meters for this chunk.")
     cumulator.timeframe = timeframe
     return cumulator

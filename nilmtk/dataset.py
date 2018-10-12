@@ -10,7 +10,7 @@ from .building import Building
 from .datastore.datastore import join_key
 from .utils import get_datastore
 from .timeframe import TimeFrame
-
+from nilmtk import MeterGroup
 
 class DataSet(object):
     """
@@ -47,6 +47,8 @@ class DataSet(object):
 
     def import_metadata(self, store):
         """
+        Import metadata. Called during startup.
+
         Parameters
         ----------
         store : nilmtk.DataStore
@@ -55,6 +57,15 @@ class DataSet(object):
         self.metadata = store.load_metadata()
         self._init_buildings(store)
         return self
+
+
+    def update_metadata(self, new_metadata):
+        '''
+        Hardly updates the metadata of the dataset. Pay 
+        attention, no validity checking performed.
+        '''
+        self.store.update_root_metadata(new_metadata)
+
 
     def save(self, destination):
         for b_id, building in iteritems(self.buildings):
@@ -87,24 +98,27 @@ class DataSet(object):
 
         self.store.window = TimeFrame(start, end, tz)
 
-    def describe(self, **kwargs):
+    def describe(self, **desc_kwargs):
         """Returns a DataFrame describing this dataset.
-        Each column is a building.  Each row is a feature."""
+        Each column is a building.  Each row is a feature.
+        desc_kwargs: Parameters passed to the pandas describe function.
+        """
         keys = self.buildings.keys()
         keys.sort()
         results = pd.DataFrame(columns=keys)
         for i, building in iteritems(self.buildings):
-            results[i] = building.describe(**kwargs)
+            results[i] = building.describe(**desc_kwargs)
         return results
 
-    def plot_good_sections(self, axes=None, label_func=None, gap=0, **kwargs):
+    def plot_good_sections(self, axes=None, label_func=None, gap=0, load_kwargs = {}, plot_kwargs = {}):
         """Plots all good sections for all buildings.
 
         Parameters
         ----------
         axes : list of axes or None.
             If None then they will be generated.
-
+        load_kwargs: arguments passed to loading
+        plot_kwargs: arguments passed to plotting   
         Returns
         -------
         axes : list of axes
@@ -120,7 +134,7 @@ class DataSet(object):
         assert n == len(axes)
         for i, (ax, elec) in enumerate(zip(axes, self.elecs())):
             elec.plot_good_sections(ax=ax, label_func=label_func, gap=gap,
-                                    **kwargs)
+                                    load_kwargs = load_kwargs, plot_kwargs = plot_kwargs)
             ax.set_title('House {}'.format(elec.building()), y=0.4, va='top')
             ax.grid(False)
             for spine in ax.spines.values():
@@ -138,25 +152,50 @@ class DataSet(object):
         return axes
 
     def elecs(self):
+        '''
+        Returns a list of all elecs of all buildings.
+        '''
         return [building.elec for building in self.buildings.values()]
+    
+    def calc_and_cache_stats(self, ignore_meters = None, verbose = False):
+        '''
+        This functo assures that the statistics are calculated and 
+        available for all meters after this call. They are then 
+        stored in the cache and can be accessed without delay 
+        afterwards.
+        Does not recalculate stats, which were already in cache.
+
+        ignore_meters: This list of meters makes it possible to ignore 
+                       several meters while calculating the statistics.
+        '''
+        for elec in self.elecs():
+            elec.calc_and_cache_stats(ignore_meters=ignore_meters, verbose=verbose)
+
 
     def clear_cache(self):
+        '''
+        This function removes the precalculated stat information
+        for all elements.
+        '''
         for elec in self.elecs():
             elec.clear_cache()
 
-    def plot_mains_power_histograms(self, axes=None, **kwargs):
+    def plot_mains_power_histograms(self, axes=None, load_kwargs={}, plot_kwargs={}, hist_kwargs={}):
         n = len(self.buildings)
         if axes is None:
             fig, axes = plt.subplots(n, 1, sharex=True)
         assert n == len(axes)
 
         for ax, elec in zip(axes, self.elecs()):
-            ax = elec.mains().plot_power_histogram(ax=ax, **kwargs)
+            ax = elec.mains().plot_power_histogram(ax=ax, load_kwargs=load_kwargs, plot_kwargs=plot_kwargs, hist_kwargs=hist_kwargs)
             ax.set_title('House {}'.format(elec.building()))
         return axes
 
     def get_activity_script(self, filename):
-        """Extracts an activity script from this dataset.
+        """Extracts an activity script for the appliances of this 
+        dataset, based on the available submeters.
+        The result is a series with the timestamp as index and 
+        true for switch-on and false for switch-off.
 
         Saves the activity script to an HDF5 file.
         Keys in the HDF5 file take the form:
@@ -205,3 +244,11 @@ class DataSet(object):
                 del starts, ends
 
         store.close()
+
+
+    def all_elecmeters(self):
+        elec_meters = []
+        for cur in self.elecs():
+            elec_meters.extend(cur.all_elecmeters())
+        all = MeterGroup(elec_meters)
+        return all

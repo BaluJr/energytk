@@ -1,5 +1,7 @@
 from __future__ import print_function, division
+from .accelerators_stat import get_good_sections_fast
 import numpy as np
+import pandas as pd
 from numpy import diff, concatenate
 import gc
 from .goodsectionsresults import GoodSectionsResults
@@ -7,7 +9,6 @@ from ..timeframe import TimeFrame
 from ..utils import timedelta64_to_secs
 from ..node import Node
 from ..timeframe import list_of_timeframes_from_list_of_dicts, timeframe_from_dict
-
 
 class GoodSections(Node):
     """Locate sections of data where the sample period is <= max_sample_period.
@@ -27,8 +28,7 @@ class GoodSections(Node):
     def process(self):
         metadata = self.upstream.get_metadata()
         self.check_requirements()
-        self.results = GoodSectionsResults(
-            metadata['device']['max_sample_period'])
+        self.results = GoodSectionsResults(metadata['device']['max_sample_period'])
         for chunk in self.upstream.process():
             self._process_chunk(chunk, metadata)
             yield chunk
@@ -59,13 +59,18 @@ class GoodSections(Node):
         """
         # Retrieve relevant metadata
         max_sample_period = metadata['device']['max_sample_period']
+        sample_period = metadata['device']['sample_period']
         look_ahead = getattr(df, 'look_ahead', None)
         timeframe = df.timeframe
 
+        # Special Case: Appliances with Sample Period 0 are always good
+        if (sample_period == 0):
+            good_sections = [TimeFrame(start=df.index[0], end = df.index[-1])] # NOT SURE WHETHER I NEED NONE!?
         # Process dataframe
-        good_sections = get_good_sections(
-            df, max_sample_period, look_ahead,
-            self.previous_chunk_ended_with_open_ended_good_section)
+        else:
+            good_sections = get_good_sections_fast(
+                df, max_sample_period, look_ahead,
+                self.previous_chunk_ended_with_open_ended_good_section)
 
         # Set self.previous_chunk_ended_with_open_ended_good_section
         if good_sections:
@@ -74,6 +79,18 @@ class GoodSections(Node):
 
             # Update self.results
             self.results.append(timeframe, {'sections': [good_sections]})
+
+
+def _free_enumerable(element):
+    if isinstance(element, (list, np.ndarray, pd.DatetimeIndex)):
+        last_index = element[-1]
+    elif isinstance(element, pd.DataFrame):
+        last_index = element.index[-1]
+    else:
+        raise("Function not working for this type.")
+    del element
+    gc.collect()
+    return last_index
 
 
 def get_good_sections(df, max_sample_period, look_ahead=None,
@@ -95,38 +112,28 @@ def get_good_sections(df, max_sample_period, look_ahead=None,
         then the first TimeFrame will have `start=None`.
     """
     index = df.dropna().sort_index().index
-    del df
+    _free_enumerable(df)
 
     if len(index) < 2:
         return []
 
+    # Determine where there are missing samples
     timedeltas_sec = timedelta64_to_secs(diff(index.values))
     timedeltas_check = timedeltas_sec <= max_sample_period
-
-    # Memory management
-    del timedeltas_sec
-    gc.collect()
-
+    _free_enumerable(timedeltas_sec)
+    
+    # Determine start and end of good sections (after/before missing samples regions)
     timedeltas_check = concatenate(
         [[previous_chunk_ended_with_open_ended_good_section],
          timedeltas_check])
     transitions = diff(timedeltas_check.astype(np.int))
-
-    # Memory management
-    last_timedeltas_check = timedeltas_check[-1]
-    del timedeltas_check
-    gc.collect()
-
+    last_timedeltas_check  = _free_enumerable(timedeltas_check)
     good_sect_starts = list(index[:-1][transitions ==  1])
     good_sect_ends   = list(index[:-1][transitions == -1])
-
-    # Memory management
-    last_index = index[-1]
-    del index
-    gc.collect()
+    last_index  = _free_enumerable(index)
 
     # Use look_ahead to see if we need to append a 
-    # good sect start or good sect end.
+    # good section start or good section end.
     look_ahead_valid = look_ahead is not None and not look_ahead.empty
     if look_ahead_valid:
         look_ahead_timedelta = look_ahead.dropna().index[0] - last_index
@@ -144,35 +151,25 @@ def get_good_sections(df, max_sample_period, look_ahead=None,
         good_sect_starts += [last_index]
 
     # Work out if this chunk ends with an open ended good section
-    if len(good_sect_ends) == 0:
-        ends_with_open_ended_good_section = (
-            len(good_sect_starts) > 0 or 
-            previous_chunk_ended_with_open_ended_good_section)
-    elif len(good_sect_starts) > 0:
-        # We have good_sect_ends and good_sect_starts
-        ends_with_open_ended_good_section = (
-            good_sect_ends[-1] < good_sect_starts[-1])
-    else:
-        # We have good_sect_ends but no good_sect_starts
-        ends_with_open_ended_good_section = False
+    all_sections_closed = (
+        len(good_sect_ends) > len(good_sect_starts) or 
+        len(good_sect_ends) == len(good_sect_starts) and not previous_chunk_ended_with_open_ended_good_section)
+    ends_with_open_ended_good_section = not all_sections_closed
 
-    # If this chunk starts or ends with an open-ended
-    # good section then the relevant TimeFrame needs to have
-    # a None as the start or end.
+    # If this chunk starts or ends with an open-ended good 
+    # section then the missing edge is remembered by a None
+    # at the begging/end. (later in the overallresult this
+    # can then be stacked together above multiple chunks )
     if previous_chunk_ended_with_open_ended_good_section:
         good_sect_starts = [None] + good_sect_starts
     if ends_with_open_ended_good_section:
         good_sect_ends += [None]
 
+    # Merge together starts and ends and return sections 
+    # as result for timeframe of this chunk
     assert len(good_sect_starts) == len(good_sect_ends)
-
     sections = [TimeFrame(start, end)
                 for start, end in zip(good_sect_starts, good_sect_ends)
                 if not (start == end and start is not None)]
-
-    # Memory management
-    del good_sect_starts
-    del good_sect_ends
-    gc.collect()
-
+    _free_enumerable([good_sect_starts, good_sect_ends])
     return sections

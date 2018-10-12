@@ -8,7 +8,7 @@ import copy
 
 from nilmtk.utils import find_nearest
 from nilmtk.feature_detectors import cluster
-from nilmtk.disaggregate import Disaggregator
+from nilmtk.disaggregate import SupervisedDisaggregator
 from nilmtk.datastore import HDFDataStore
 
 # Fix the seed for repeatability of experiments
@@ -16,7 +16,7 @@ SEED = 42
 np.random.seed(SEED)
 
 
-class CombinatorialOptimisation(Disaggregator):
+class CombinatorialOptimisation(SupervisedDisaggregator):
     """1 dimensional combinatorial optimisation NILM algorithm.
 
     Attributes
@@ -52,7 +52,7 @@ class CombinatorialOptimisation(Disaggregator):
         Parameters
         ----------
         metergroup : a nilmtk.MeterGroup object
-        num_states_dict : dict
+        num_states_dict : dict from meter to amount of states including the off state
         **load_kwargs : keyword arguments passed to `meter.power_series()`
 
         Notes
@@ -99,6 +99,15 @@ class CombinatorialOptimisation(Disaggregator):
         print("Done training!")
 
     def train_on_chunk(self, chunk, meter, max_num_clusters, num_on_states):
+        '''
+        Parameters
+        ----------
+        chunk : The powerline
+        meter: The meter object
+        max_num_clusters : The amount of clusters to check for
+        num_on_states : The amount of states which are considered for a single appliance
+        '''
+
         # Check if we've already trained on this meter
         meters_in_model = [d['training_metadata'] for d in self.model]
         if meter in meters_in_model:
@@ -107,6 +116,7 @@ class CombinatorialOptimisation(Disaggregator):
                 "  Can't train twice on the same meter!"
                 .format(meter))
 
+        # Build the states, which are available for this appliance
         states = cluster(chunk, max_num_clusters, num_on_states)
         self.model.append({
             'states': states,
@@ -121,7 +131,7 @@ class CombinatorialOptimisation(Disaggregator):
             centroids = [model['states'] for model in self.model]
             self.state_combinations = cartesian(centroids)
 
-    def disaggregate(self, mains, output_datastore,**load_kwargs):
+    def disaggregate(self, mains, output_datastore, dont_write_zerosections = False, **load_kwargs):
         '''Disaggregate mains according to the model learnt previously.
 
         Parameters
@@ -129,6 +139,8 @@ class CombinatorialOptimisation(Disaggregator):
         mains : nilmtk.ElecMeter or nilmtk.MeterGroup
         output_datastore : instance of nilmtk.DataStore subclass
             For storing power predictions from disaggregation algorithm.
+        dont_write_zerosections: boolean, optional
+            When set to true only nonzero sections are stored what saves storage.
         sample_period : number, optional
             The desired sample period in seconds.  Set to 60 by default.
         sections : TimeFrameGroup, optional
@@ -136,7 +148,7 @@ class CombinatorialOptimisation(Disaggregator):
         **load_kwargs : key word arguments
             Passed to `mains.power_series(**kwargs)`
         '''
-        load_kwargs = self._pre_disaggregation_checks(load_kwargs)
+        load_kwargs = self._pre_disaggregation_checks(mains, load_kwargs)
 
         load_kwargs.setdefault('sample_period', 60)
         load_kwargs.setdefault('sections', mains.good_sections())
@@ -155,8 +167,10 @@ class CombinatorialOptimisation(Disaggregator):
             timeframes.append(chunk.timeframe)
             measurement = chunk.name
 
+            # Do the disaggregation
             appliance_powers = self.disaggregate_chunk(chunk)
 
+            # Write results into the data storage
             for i, model in enumerate(self.model):
                 appliance_power = appliance_powers.iloc[:, i]
                 if len(appliance_power) == 0:
@@ -168,12 +182,17 @@ class CombinatorialOptimisation(Disaggregator):
                     appliance_power.values, index=appliance_power.index,
                     columns=cols)
                 key = '{}/elec/meter{}'.format(building_path, meter_instance)
+
+                raise("Does this really work? Todo")
+                if dont_write_zerosections:
+                    df = df[df[('power','active')] != 0]
                 output_datastore.append(key, df)
 
-            # Copy mains data to disag output
-            mains_df = pd.DataFrame(chunk, columns=cols)
+            # Copy mains data to disag output (sothat it is accessible together with disaggregations=
+            mains_df = pd.DataFrame(chunk, columns=cols, dtype="float32")
             output_datastore.append(key=mains_data_location, value=mains_df)
 
+        # Finally write metadata
         if data_is_available:
             self._save_metadata_for_disaggregation(
                 output_datastore=output_datastore,
@@ -238,17 +257,20 @@ class CombinatorialOptimisation(Disaggregator):
         # summed_power_of_each_combination is now an array where each
         # value is the total power demand for each combination of states.
 
-        # Start disaggregation
+        # Do disaggregation by choosing combination of appliances closest to consumption
         indices_of_state_combinations, residual_power = find_nearest(
             summed_power_of_each_combination, mains.values)
 
+        # Store all the results together
         appliance_powers_dict = {}
         for i, model in enumerate(self.model):
             print("Estimating power demand for '{}'"
                   .format(model['training_metadata']))
+            # Create series of power for the specfic model at position i
             predicted_power = state_combinations[
                 indices_of_state_combinations, i].flatten()
             column = pd.Series(predicted_power, index=mains.index, name=i)
+            # Return the power for the meter as the key 
             appliance_powers_dict[self.model[i]['training_metadata']] = column
         appliance_powers = pd.DataFrame(appliance_powers_dict, dtype='float32')
         return appliance_powers

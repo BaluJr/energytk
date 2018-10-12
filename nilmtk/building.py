@@ -24,6 +24,10 @@ class Building(Hashable):
         self.metadata = {}
     
     def import_metadata(self, store, key, dataset_name):
+        '''
+        Import metadata. Called during startup.
+        '''
+        # Temporary Hack: Todo 
         self.metadata = store.load_metadata(key)
         if 'dataset' not in self.metadata:
             self.metadata['dataset'] = dataset_name
@@ -41,8 +45,10 @@ class Building(Hashable):
         return BuildingID(instance=md.get('instance'), 
                           dataset=md.get('dataset'))
 
-    def describe(self, **kwargs):
-        """Returns a Series describing this building."""
+    def describe(self, **desc_kwargs):
+        '''Returns a Series describing this building.
+        desc_kwargs: Parameters passed to the pandas describe function.
+        '''
         md = self.metadata
         series = pd.Series(name=self.identifier.instance)
 
@@ -51,6 +57,6 @@ class Building(Hashable):
                     'ownership', 'n_occupants', 'description_of_occupants']:
             series[key] = md.get(key)
 
-        series = pd.concat([series, self.elec.describe(**kwargs)])
+        series = pd.concat([series, self.elec.describe(**desc_kwargs)])
 
         return series

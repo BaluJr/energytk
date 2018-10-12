@@ -15,22 +15,32 @@ import numpy as np
 from datetime import timedelta
 import gc
 import pytz
-
+from .meterseries import MeterSeries
 from .timeframe import TimeFrame
 from .measurement import select_best_ac_type
-from .utils import (offset_alias_to_seconds, convert_to_timestamp,
+from .utils import (offset_alias_to_seconds, convert_to_timestamp, normalise_timestamp,
                     flatten_2d_list, append_or_extend_list,
                     timedelta64_to_secs, safe_resample)
 from .plots import plot_series
 from .preprocessing import Apply
 from nilmtk.stats.histogram import histogram_from_generator
 from nilmtk.appliance import DEFAULT_ON_POWER_THRESHOLD
+import pickle as pckl
 
 MAX_SIZE_ENTROPY = 10000
 
-class Electric(object):
-    """Common implementations of methods shared by ElecMeter and MeterGroup.
+class Electric(MeterSeries):
     """
+    Todo: 
+    - Die Superklasse MeterSeries hatte ich eingefuehrt. Funktioniert das so wie geplant?
+    - Aber momentan benutze ich das ja nicht, da ich die externen daten auch einfach in der Struktur der 
+        ElecMeters speichere
+    - Bisher habe ich aber nur laod_series hochkopiert
+
+    Common implementations of methods shared by ElecMeter and MeterGroup.
+    """
+
+    #region ACTIVATION FUNCTIONS
     def when_on(self, on_power_threshold=None, **load_kwargs):
         """Are the connected appliances appliance is on (True) or off (False)?
 
@@ -68,6 +78,8 @@ class Electric(object):
 
     def min_off_duration(self):
         return self._aggregate_metadata_attribute('min_off_duration')
+    #endregion
+
 
     def _aggregate_metadata_attribute(self, attr, agg_func=np.max,
                                       default_value=0,
@@ -102,9 +114,26 @@ class Electric(object):
                 return True
         return False
 
-    def power_series_all_data(self, **kwargs):
+    def power_series_all_data(self, **load_kwargs):
+        from nilmtk import MeterGroup
+        if "tmp_folder" in load_kwargs and not load_kwargs['tmp_folder'] is None:
+            try:
+                tmp = None
+                if type(self) is MeterGroup:
+                    for elec in self.all_elecmeters():
+                        if tmp is None:
+                            tmp = elec.power_series_all_data(**load_kwargs)
+                        else:
+                            tmp += elec.power_series_all_data(**load_kwargs)
+                else:
+                    tmp = pckl.load(open(load_kwargs['tmp_folder'] + str(self.identifier), "rb"))
+                    print("use cached")
+                return tmp
+            except:
+                print("not cached")
+
         chunks = []
-        for series in self.power_series(**kwargs):
+        for series in self.power_series(**load_kwargs):
             if len(series) > 0:
                 chunks.append(series)
         if chunks:
@@ -119,13 +148,21 @@ class Electric(object):
             all_data = pd.concat(chunks)
         else:
             all_data = None
+
+        if "tmp_folder" in load_kwargs and not load_kwargs['tmp_folder'] is None and not type(self) is MeterGroup:
+            pckl.dump(all_data, open(load_kwargs['tmp_folder'] + str(self.identifier), "wb"))
+            print('write cached')
+
         return all_data
 
     def _prep_kwargs_for_sample_period_and_resample(self, sample_period=None,
                                                     resample=False,
                                                     resample_kwargs=None,
-                                                    **kwargs):
-        if 'preprocessing' in kwargs:
+                                                    **load_kwargs):
+        '''
+        This function sets the given resampling parameters inside the load_kwargs
+        '''
+        if 'preprocessing' in load_kwargs:
             warn("If you are using `preprocessing` to resample then please"
                  " do not!  Instead, please use the `sample_period` parameter"
                  " and set `resample=True`.")
@@ -136,18 +173,36 @@ class Electric(object):
             resample = True
         sample_period = int(round(sample_period))
 
+        if "high_res" in load_kwargs:
+            resample = True
+
         if resample:
             if resample_kwargs is None:
                 resample_kwargs = {}
 
-            def resample_func(df):
-                resample_kwargs['rule'] = '{:d}S'.format(sample_period)
-                return safe_resample(df, **resample_kwargs)
+            if "high_res" in load_kwargs:
+                # The special highres appliances sampling: May replace by more accurate sampling
+                # Look in eventbased_combination.py. Needed if longer periods desired with
+                # sampling rate far lower than the events frequeny.
+                def resample_func(df):
+                    sample_period_str = '{:d}S'.format(sample_period)
+                    start = normalise_timestamp(df.timeframe.start, sample_period_str) 
+                    new_idx = pd.DatetimeIndex(start=start, end=df.timeframe.end, freq=sample_period_str)
+                    if df.empty:
+                        # Potentially a bug, since it does not recognize on-sections longer than load_sec
+                        # Ignore for now, but have to solve in the future by keeping it nan and ffill.
+                        return pd.DataFrame(0, index=new_idx, columns=df.columns)
+                    df = df.combine_first(pd.DataFrame(index=new_idx, columns=df.columns))
+                    return df.interpolate().ffill().bfill().asfreq(sample_period_str)
+            else:
+                def resample_func(df):
+                    resample_kwargs['rule'] = '{:d}S'.format(sample_period)
+                    return safe_resample(df, **resample_kwargs)
 
-            kwargs.setdefault('preprocessing', []).append(
+            load_kwargs.setdefault('preprocessing', []).append(
                 Apply(func=resample_func))
 
-        return kwargs
+        return load_kwargs
 
     def _replace_none_with_meter_timeframe(self, start=None, end=None):
         if start is None or end is None:
@@ -159,7 +214,7 @@ class Electric(object):
         return start, end
 
     def plot(self, ax=None, timeframe=None, plot_legend=True, unit='W',
-             plot_kwargs=None, **kwargs):
+             plot_kwargs=None, **load_kwargs):
         """
         Parameters
         ----------
@@ -169,16 +224,17 @@ class Electric(object):
         plot_legend : boolean, optional
             Defaults to True.  Set to False to not plot legend.
         unit : {'W', 'kW'}
-        **kwargs
+        **load_kwargs
         """
         # Get start and end times for the plot
         timeframe = self.get_timeframe() if timeframe is None else timeframe
         if not timeframe or timeframe.empty:
             return ax
 
-        kwargs['sections'] = [timeframe]
-        kwargs = self._set_sample_period(timeframe, **kwargs)
-        power_series = self.power_series_all_data(**kwargs)
+        load_kwargs['sections'] = [timeframe]
+        if not 'sample_period' in load_kwargs:
+            load_kwargs = self._set_sample_period(timeframe, **load_kwargs)
+        power_series = self.power_series_all_data(**load_kwargs)
         if power_series is None or power_series.empty:
             return ax
 
@@ -192,19 +248,19 @@ class Electric(object):
         # https://github.com/nilmtk/nilmtk/issues/407
         # The following line is a work around for this bug.
         power_series.name = self.label()
-        ax = power_series.plot(ax=ax, **plot_kwargs)
+        ax = pd.DataFrame(power_series).plot(ax=ax, **plot_kwargs) # need to cast sothat sharex included -
         ax.set_ylabel('Power ({})'.format(unit))
         if plot_legend:
             plt.legend()
 
         return ax
 
-    def _set_sample_period(self, timeframe, width=800, **kwargs):
+    def _set_sample_period(self, timeframe, width=800, **load_kwargs):
         # Calculate the resolution for the x axis
         duration = timeframe.timedelta.total_seconds()
         secs_per_pixel = int(round(duration / width))
-        kwargs.update({'sample_period': secs_per_pixel, 'resample': True})
-        return kwargs
+        load_kwargs.update({'sample_period': secs_per_pixel, 'resample': True})
+        return load_kwargs
 
     def proportion_of_upstream(self, **load_kwargs):
         """Returns a value in the range [0,1] specifying the proportion of
@@ -266,7 +322,7 @@ class Electric(object):
         energy = self.total_energy(**load_kwargs)
         return energy / periods
         
-    def proportion_of_energy(self, other, **loader_kwargs):
+    def proportion_of_energy(self, other, **load_kwargs):
         """Compute the proportion of energy of self compared to `other`.
 
         By default, only uses other.good_sections().  You may want to set 
@@ -281,15 +337,15 @@ class Electric(object):
         -------
         float [0,1] or NaN if other.total_energy == 0
         """
-        good_other_sections = other.good_sections(**loader_kwargs)
-        loader_kwargs.setdefault('sections', good_other_sections)
+        good_other_sections = other.good_sections(**load_kwargs)
+        load_kwargs.setdefault('sections', good_other_sections)
 
         # TODO test effect of setting `sections` for other
-        other_total_energy = other.total_energy(**loader_kwargs)
+        other_total_energy = other.total_energy(**load_kwargs)
         if other_total_energy.sum() == 0:
             return np.NaN
 
-        total_energy = self.total_energy(**loader_kwargs)
+        total_energy = self.total_energy(**load_kwargs)
         if total_energy.empty:
             return 0.0
 
@@ -345,6 +401,7 @@ class Electric(object):
             return np.NaN
 
         # we're using Python 3's division (which returns a float)
+        raise Exception("Hier wird Python 3 Funktionalitaet benutzt! Aufpassen!!!")
         x_bar = x_sum / x_n 
         y_bar = y_sum / y_n
 
@@ -606,44 +663,14 @@ class Electric(object):
         warn("`available_power_ac_types` is deprecated.  Please use"
              " `available_ac_types('power')` instead.", DeprecationWarning)
         return self.available_ac_types('power')
-
-    def load_series(self, **kwargs):
-        """
-        Parameters
-        ----------
-        ac_type : str
-        physical_quantity : str
-            We sum across ac_types of this physical quantity.
-        **kwargs : passed through to load().
-
-        Returns
-        -------
-        generator of pd.Series.  If a single ac_type is found for the
-        physical_quantity then the series.name will be a normal tuple.
-        If more than 1 ac_type is found then the ac_type will be a string
-        of the ac_types with '+' in between.  e.g. 'active+apparent'.
-        """
-        # Pull data through preprocessing pipeline
-        physical_quantity = kwargs['physical_quantity']
-        generator = self.load(**kwargs)
-        for chunk in generator:
-            if chunk.empty:
-                yield chunk
-                continue
-            chunk_to_yield = chunk[physical_quantity].sum(axis=1, skipna=False)
-            ac_types = '+'.join(chunk[physical_quantity].columns)
-            chunk_to_yield.name = (physical_quantity, ac_types)
-            chunk_to_yield.timeframe = getattr(chunk, 'timeframe', None)
-            chunk_to_yield.look_ahead = getattr(chunk, 'look_ahead', None)
-            yield chunk_to_yield
-
-    def power_series(self, **kwargs):
+    
+    def power_series(self, **load_kwargs):
         """Get power Series.
 
         Parameters
         ----------
         ac_type : str, defaults to 'best'
-        **kwargs :
+        **load_kwargs :
             Any other key word arguments are passed to self.load()
 
         Returns
@@ -651,11 +678,11 @@ class Electric(object):
         generator of pd.Series of power measurements.
         """
         # Select power column:
-        kwargs['physical_quantity'] = 'power'
-        kwargs.setdefault('ac_type', 'best')
-        return self.load_series(**kwargs)
+        load_kwargs['physical_quantity'] = 'power'
+        load_kwargs.setdefault('ac_type', 'best')
+        return self.load_series(**load_kwargs)
 
-    def activity_histogram(self, period='D', bin_duration='H', **kwargs):
+    def activity_histogram(self, period='D', bin_duration='H', **load_kwargs):
         """Return a histogram vector showing when activity occurs.
 
         e.g. to see when, over the course of an average day, activity occurs
@@ -680,9 +707,9 @@ class Electric(object):
         n_bins = int(n_bins)
 
         # Resample to `bin_duration` and load
-        kwargs['sample_period'] = offset_alias_to_seconds(bin_duration)
-        kwargs['resample_kwargs'] = {'how': 'max'}
-        when_on = self.when_on(**kwargs)
+        load_kwargs['sample_period'] = offset_alias_to_seconds(bin_duration)
+        load_kwargs['resample_kwargs'] = {'how': 'max'}
+        when_on = self.when_on(**load_kwargs)
 
         # Calculate histogram...
         hist = np.zeros(n_bins, dtype=int)
@@ -711,11 +738,11 @@ class Electric(object):
         return hist
 
     def plot_activity_histogram(self, ax=None, period='D', bin_duration='H',
-                                plot_kwargs=None, **kwargs):
+                                plot_kwargs=None, **load_kwargs):
         if ax is None:
             ax = plt.gca()
         hist = self.activity_histogram(bin_duration=bin_duration,
-                                       period=period, **kwargs)
+                                       period=period, **load_kwargs)
         if plot_kwargs is None:
             plot_kwargs = {}
         n_bins = len(hist)
@@ -728,7 +755,7 @@ class Electric(object):
         ax.set_ylabel('Count')
         return ax
 
-    def activation_series(self, *args, **kwargs):
+    def activation_series(self, *args, **load_kwargs):
         """Returns runs of an appliance.
 
         Most appliances spend a lot of their time off.  This function finds
@@ -750,7 +777,7 @@ class Electric(object):
             Number of rows to include before and after the detected activation
         on_power_threshold : int or float
             Defaults to self.on_power_threshold()
-        **kwargs : kwargs for self.power_series()
+        **load_kwargs : kwargs for self.power_series()
 
         Returns
         -------
@@ -762,10 +789,10 @@ class Electric(object):
         """
         warn("`activation_series()` is deprecated."
              "  Please use `get_activations()` instead!", DeprecationWarning)
-        return self.get_activations(*args, **kwargs)
+        return self.get_activations(*args, **load_kwargs)
 
     def get_activations(self, min_off_duration=None, min_on_duration=None,
-                        border=1, on_power_threshold=None, **kwargs):
+                        border=1, on_power_threshold=None, **load_kwargs):
         """Returns runs of an appliance.
 
         Most appliances spend a lot of their time off.  This function finds
@@ -787,7 +814,7 @@ class Electric(object):
             Number of rows to include before and after the detected activation
         on_power_threshold : int or float
             Defaults to self.on_power_threshold()
-        **kwargs : kwargs for self.power_series()
+        **load_kwargs : kwargs for self.power_series()
 
         Returns
         -------
@@ -803,8 +830,8 @@ class Electric(object):
             min_on_duration = self.min_on_duration()
 
         activations = []
-        kwargs.setdefault('resample', True)
-        for chunk in self.power_series(**kwargs):
+        load_kwargs.setdefault('resample', True)
+        for chunk in self.power_series(**load_kwargs):
             activations_for_chunk = get_activations(
                 chunk=chunk, min_off_duration=min_off_duration,
                 min_on_duration=min_on_duration, border=border,
@@ -814,41 +841,64 @@ class Electric(object):
         return activations
 
 
-def align_two_meters(master, slave, func='power_series'):
-    """Returns a generator of 2-column pd.DataFrames.  The first column is from
+
+
+
+#region GLOBAL SPACE HELP FUNCTIONS
+def align_two_meters(master, slave, func='power_series', sample_period = None):
+    """ Rename me! Now supports more than two meters.
+    Returns a generator of 2-column pd.DataFrames.  The first column is from
     `master`, the second from `slave`.
 
     Takes the sample rate and good_periods of `master` and applies to `slave`.
 
     Parameters
     ----------
-    master, slave : ElecMeter or MeterGroup instances
+    master:
+        The main meter which defines frequency and area to query.
+    slave :
+        ElecMeter or MeterGroup instances
+        (can be also a list, then there is an dedicated
+        entry in the disctionary for each slave.)
+    sample_period: int
+        Sample period in seconds.
+
+    Returns:
+        aligned_series: pd.DataFrame
+        One column for the Master and one column per Slave
+        Has the columns "Master", "Slave"
+        or for list of slaves:
+        {"Master", 1, 2, ...}
     """
-    sample_period = master.sample_period()
+    if sample_period is None:
+        sample_period = master.sample_period()
+
     period_alias = '{:d}S'.format(sample_period)
-    sections = master.good_sections()
-    master_generator = getattr(master, func)(sections=sections)
+    sections = master.good_sections().merge_shorter_gaps_than(sample_period) # I have included the merge to be capable to measure ECO Dataset
+    master_generator = getattr(master, func)(sections=sections, sample_period = sample_period)
     for master_chunk in master_generator:
         if len(master_chunk) < 2:
             return
-        chunk_timeframe = TimeFrame(master_chunk.index[0],
-                                    master_chunk.index[-1])
-        slave_generator = getattr(slave, func)(sections=[chunk_timeframe])
-        slave_chunk = next(slave_generator)
+        chunk_timeframe = TimeFrame(master_chunk.index[0], master_chunk.index[-1])
 
-        # TODO: do this resampling in the pipeline?
-        if not slave_chunk.empty:
-            slave_chunk = slave_chunk.resample(period_alias).mean()
-            
-        if slave_chunk.empty:
-            continue
-            
-        master_chunk = master_chunk.resample(period_alias).mean()
+        if not type(slave) is list:
+            slave_generator = getattr(slave, func)(sections=[chunk_timeframe], sample_period = sample_period)
+            slave_chunk = next(slave_generator)
+            # TODO: do this resampling in the pipeline? Yes!? Why not! I do so and additionally added highres. meters! :)
+            #slave_chunk = slave_chunk.resample(period_alias)
+            #if slave_chunk.empty:
+            #    continue
+            #master_chunk = master_chunk.resample(period_alias)
+            yield pd.DataFrame({'master': master_chunk, 'slave': slave_chunk})
+        else:
+            data = {"master": master_chunk}
+            for i, cur_slave in enumerate(slave):
+                slave_generator = getattr(cur_slave, func)(sections=[chunk_timeframe], sample_period = sample_period)
+                data[i] = next(slave_generator)
+            yield pd.DataFrame(data = data)
 
-        yield pd.DataFrame({'master': master_chunk, 'slave': slave_chunk})
 
-
-def activation_series_for_chunk(*args, **kwargs):
+def activation_series_for_chunk(*args, **load_kwargs):
     """Returns runs of an appliance.
 
     Most appliances spend a lot of their time off.  This function finds
@@ -880,7 +930,7 @@ def activation_series_for_chunk(*args, **kwargs):
     """
     warn("`activation_series_for_chunk()` is deprecated."
          "  Please use `get_activations()` instead!", DeprecationWarning)
-    return get_activations(*args, **kwargs)
+    return get_activations(*args, **load_kwargs)
 
 
 def get_activations(chunk, min_off_duration=0, min_on_duration=0,
@@ -913,7 +963,7 @@ def get_activations(chunk, min_off_duration=0, min_on_duration=0,
     when_on = chunk >= on_power_threshold
 
     # Find state changes
-    state_changes = when_on.astype(np.int8).diff()
+    state_changes = when_on.astype(np.float32).diff() # Removes the problem and is still working.
     del when_on
     switch_on_events = np.where(state_changes == 1)[0]
     switch_off_events = np.where(state_changes == -1)[0]
@@ -976,3 +1026,4 @@ def get_vampire_power(power_series):
     # power_series.min() in case we get round to building
     # a better vampire power function!
     return power_series.min()
+#endregion

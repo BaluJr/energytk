@@ -9,6 +9,8 @@ from nilmtk.timeframegroup import TimeFrameGroup
 
 class GoodSectionsResults(Results):
     """
+    ICH ENTFERNE DIE SEPERIERUNG IN DIE SECTIONS UND ERLAUBE NUR NOCH DIE BERECHNUNG ALS GANZES
+
     Attributes
     ----------
     max_sample_period_td : timedelta
@@ -35,10 +37,11 @@ class GoodSectionsResults(Results):
         new_results['sections'] = [TimeFrameGroup(new_results['sections'][0])]
         super(GoodSectionsResults, self).append(timeframe, new_results)
 
-    def combined(self):
+    def finalize(self):
         """Merges together any good sections which span multiple segments,
         as long as those segments are adjacent 
         (previous.end - max_sample_period <= next.start <= previous.end).
+        This may happen if we merge cached sections and noncached sections.
 
         Returns
         -------
@@ -60,7 +63,7 @@ class GoodSectionsResults(Results):
 
                 if rows_are_adjacent and row_sections[0].start is None:
                     assert sections[-1].end is None
-                    sections[-1].end = row_sections[0].end
+                    sections._df.iloc[-1,1] = row_sections[0].end # HIER MUSSTE ICH AUFPASSEN, DASS ICH UEBERSCHREIBE!
                     row_sections.pop(0)
                 else:
                     # row_sections[0] and sections[-1] were not in adjacent chunks
@@ -79,12 +82,14 @@ class GoodSectionsResults(Results):
             end_date_of_prev_row = row['end']
             sections.extend(row_sections)
 
-        if sections:
+        if sections and sections.count() > 0:
             sections[-1].include_end = True
             if sections[-1].end is None:
-                sections[-1].end = end_date_of_prev_row
+                sections[-1,1] = end_date_of_prev_row  # HIER MUSSTE ICH AUFPASSEN, DASS ICH UEBERSCHREIBE!
 
-        return sections
+        sections._df.reset_index(drop=True, inplace=True)
+        self._data = sections
+        #return sections
 
     def unify(self, other):
         super(GoodSectionsResults, self).unify(other)
@@ -94,34 +99,44 @@ class GoodSectionsResults(Results):
             self._data['sections'].loc[start] = intersection
 
     def to_dict(self):
-        good_sections = self.combined()
+        good_sections = self#.combined()
         good_sections_list_of_dicts = [timeframe.to_dict() 
                                        for timeframe in good_sections]
         return {'statistics': {'good_sections': good_sections_list_of_dicts}}
 
-    def plot(self, **kwargs):
-        timeframes = self.combined()
-        return timeframes.plot(**kwargs)
+    def plot(self, **plot_kwargs):
+        timeframes = self._data#.combined()
+        return timeframes.plot(**plot_kwargs)
         
     def import_from_cache(self, cached_stat, sections):
+        self._data = TimeFrameGroup(cached_stat)
+
+        #self._data = []
+        #for _, row in cached_stat.iterrows():
+        #    self._data.append(TimeFrame(start=row['section_start'], end=row['section_end']))
+        #self._data = list(cached_stat.apply(lambda row: TimeFrame(start=row['section_start'], end=row['section_end']), axis=1))
+
         # we (deliberately) use duplicate indices to cache GoodSectionResults
-        grouped_by_index = cached_stat.groupby(level=0)
-        tz = get_tz(cached_stat)
-        for tf_start, df_grouped_by_index in grouped_by_index:
-            grouped_by_end = df_grouped_by_index.groupby('end')
-            for tf_end, sections_df in grouped_by_end:
-                end = tz_localize_naive(tf_end, tz)
-                timeframe = TimeFrame(tf_start, end)
-                if timeframe in sections:
-                    timeframes = []
-                    for _, row in sections_df.iterrows():
-                        section_start = tz_localize_naive(row['section_start'], tz)
-                        section_end = tz_localize_naive(row['section_end'], tz)
-                        timeframes.append(TimeFrame(section_start, section_end))
-                    self.append(timeframe, {'sections': [timeframes]})
+        #grouped_by_index = cached_stat.groupby(level=0)
+        #tz = get_tz(cached_stat)
+        #for tf_start, df_grouped_by_index in grouped_by_index:
+        #    grouped_by_end = df_grouped_by_index.groupby('end')
+        #    for tf_end, sections_df in grouped_by_end:
+        #        end = tz_localize_naive(tf_end, tz)
+        #        timeframe = TimeFrame(tf_start, end)
+        #        if any([section.contains(timeframe) for section in sections]): # Had to adapt this, because otherwise no cache use when loaded in chunks ## if timeframe in sections:                   #### Todo: HIER IST EIN FEHLER!!! HIER MUSS DARAUF GEPRUEFT WERDEN OB ES DRIN IST
+        #            timeframes = []
+        #            for _, row in sections_df.iterrows():
+        #                section_start = tz_localize_naive(row['section_start'], tz)
+        #                section_end = tz_localize_naive(row['section_end'], tz)
+        #                timeframes.append(TimeFrame(section_start, section_end))
+        #            self.append(timeframe, {'sections': [timeframes]})
+        #i = 0
 
     def export_to_cache(self):
         """
+        Tranform the dataframe into a form storable by the datasystem.
+
         Returns
         -------
         DataFrame with three columns: 'end', 'section_end', 'section_start'.
@@ -132,14 +147,20 @@ class GoodSectionsResults(Results):
             When we import from cache, we assume the timezone for the data 
             columns is the same as the tz for the index.
         """
-        index_for_cache = []
-        data_for_cache = [] # list of dicts with keys 'end', 'section_end', 'section_start'
-        for index, row in self._data.iterrows():
-            for section in row['sections']:
-                index_for_cache.append(index)
-                data_for_cache.append(
-                    {'end': row['end'], 
-                     'section_start': convert_none_to_nat(section.start),
-                     'section_end': convert_none_to_nat(section.end)})
-        df = pd.DataFrame(data_for_cache, index=index_for_cache)
-        return df.apply(pd.to_numeric, errors='ignore')
+        return self._data._df
+        #data_for_cache = {'section_start':[], 'section_end':[]}
+        #for section in self._data:
+        #    data_for_cache['section_start'].append(convert_none_to_nat(section.start))
+        #    data_for_cache['section_end'].append(convert_none_to_nat(section.end))
+        #return pd.DataFrame(data_for_cache)
+        #index_for_cache = []
+        #data_for_cache = [] # list of dicts with keys 'end', 'section_end', 'section_start'
+        #for index, row in self._data.iterrows():
+        #    for section in row['sections']:
+        #        index_for_cache.append(index)
+        #        data_for_cache.append(
+        #            {'end': row['end'], 
+        #             'section_start': convert_none_to_nat(section.start),
+        #             'section_end': convert_none_to_nat(section.end)})
+        #df = pd.DataFrame(data_for_cache, index=index_for_cache)
+        #return df.convert_objects()

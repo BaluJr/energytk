@@ -33,10 +33,11 @@ class TotalEnergyResults(Results):
                 self._data[ac_type].loc[i] += other._data[ac_type].loc[i]
 
     def to_dict(self):
-        return {'total_energy': self.combined().to_dict()}
+        return {'total_energy': self.to_dict()} #.combined().to_dict()}
 
-    def simple(self):
-        return self.combined()
+    def finalize(self):
+        self._data = self._data["active"].sum() #self._columns_with_end_removed()].sum() #results_obj._data.sum()['active
+        #return self.combined()
 
     def export_to_cache(self):
         return self._data.fillna(0).apply(pd.to_numeric, errors='ignore')

@@ -148,6 +148,10 @@ def container_to_string(container, sep='_'):
 
 
 def simplest_type_for(values):
+    '''
+    Reduces the values to None, a single item 
+    or a tuple.
+    '''
     n_values = len(values)
     if n_values == 1:
         return list(values)[0]

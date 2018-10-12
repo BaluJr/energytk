@@ -53,7 +53,7 @@ class TestEnergy(unittest.TestCase):
         energy = TotalEnergy(clipped)
         energy.run()
         energy_results = deepcopy(energy.results)
-        check_energy_numbers(self, energy_results.combined())
+        check_energy_numbers(self, energy_results)#.combined())
 
 if __name__ == '__main__':
     unittest.main()

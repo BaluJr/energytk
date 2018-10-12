@@ -3,7 +3,7 @@ import numpy as np
 from warnings import warn
 
 
-def histogram_from_generator(generator, bins=None, range=None, **kwargs):
+def histogram_from_generator(generator, bins=None, range=None, **hist_kwargs):
     """Apart from 'generator', takes the same key word arguments 
     as numpy.histogram. And returns the same objects as np.histogram.
     
@@ -17,7 +17,7 @@ def histogram_from_generator(generator, bins=None, range=None, **kwargs):
         if None then uses int(range[1]-range[0])
     """
 
-    if 'density' in kwargs or 'normed' in kwargs:
+    if 'density' in hist_kwargs or 'normed' in hist_kwargs:
         warn("This function is not designed to output densities.")
 
     histogram_cumulator = None
@@ -31,7 +31,7 @@ def histogram_from_generator(generator, bins=None, range=None, **kwargs):
                 range = (range[0], chunk.max())
         if bins is None:
             bins = int(range[1] - range[0])
-        hist, bins = np.histogram(chunk, bins=bins, range=range, **kwargs)
+        hist, bins = np.histogram(chunk, bins=bins, range=range, **hist_kwargs)
         if histogram_cumulator is None:
             histogram_cumulator = hist
         else:

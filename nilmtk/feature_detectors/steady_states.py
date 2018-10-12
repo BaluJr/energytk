@@ -2,16 +2,22 @@ from __future__ import print_function, division
 import numpy as np
 import pandas as pd 
 import sys
+import time
 
 
 # Fix the seed for repeatability of experiments
 SEED = 42
 np.random.seed(SEED)
 
+# Set a debug flag which activates time measurement (global)
+DEBUG = True
 
 def find_steady_states_transients(metergroup, columns, noise_level,
                                   state_threshold, **load_kwargs):
     """
+    Creates the states transient list over multiple meters in a 
+    meter group.
+
     Returns
     -------
     steady_states, transients : pd.DataFrame
@@ -19,7 +25,7 @@ def find_steady_states_transients(metergroup, columns, noise_level,
     steady_states_list = []
     transients_list = []
 
-    for power_df in metergroup.load(columns=columns, **load_kwargs):
+    for power_df in metergroup.load(columns=columns, **load_kwargs): # Load brings it also to a single powerline
         """
         if len(power_df.columns) <= 2:
             # Use whatever is available
@@ -42,7 +48,8 @@ def find_steady_states_transients(metergroup, columns, noise_level,
 
 def find_steady_states(dataframe, min_n_samples=2, state_threshold=15,
                        noise_level=70):
-    """Finds steady states given a DataFrame of power.
+    """Finds steady states given a DataFrame of power with only
+    a single column.
 
     Parameters
     ----------
@@ -75,14 +82,23 @@ def find_steady_states(dataframe, min_n_samples=2, state_threshold=15,
     transitions = []  # holds information on transitions
     steady_states = []  # steadyStates to store in returned Dataframe
     N = 0  # N stores the number of samples in state
-    time = dataframe.iloc[0].name  # first state starts at beginning
+    curTime = dataframe.iloc[0].name  # first state starts at beginning
 
     # Iterate over the rows performing algorithm
     print ("Finding Edges, please wait ...", end="\n")
     sys.stdout.flush()
 
+    oldTime = time.clock()
+    i = 0
     for row in dataframe.itertuples():
         #print(row)
+        i += 1
+        if DEBUG and i == 100000:
+            tmpTime = time.clock()
+            print(str(tmpTime - oldTime) + " seconds for 100000 steps")
+            oldTime = tmpTime
+            i = 0
+
 
         # test if either active or reactive moved more than threshold
         # http://stackoverflow.com/questions/17418108/elegant-way-to-perform-tuple-arithmetic
@@ -96,8 +112,12 @@ def find_steady_states(dataframe, min_n_samples=2, state_threshold=15,
         # logging.debug('The previous measurement is: %s' %
         # (previousMeasurement,))
 
+        # Elementwise absolute differences
         state_change = np.fabs(
             np.subtract(this_measurement, previous_measurement))
+        
+        #if i < 10:
+        #    print('i: ' + str(state_change))
         # logging.debug('The State Change is: %s' % (stateChange,))
 
         if np.sum(state_change > state_threshold):
@@ -119,22 +139,23 @@ def find_steady_states(dataframe, min_n_samples=2, state_threshold=15,
                 # power information
 
                 # Avoid outputting first transition from zero
-                index_transitions.append(time)
-                # logging.debug('The current row time is: %s' % (time))
+                index_transitions.append(curTime)
+                
+                # logging.debug('The current row curTime is: %s' % (curTime))
                 transitions.append(last_transition)
 
                 # I think we want this, though not specifically in Hart's algo notes
                 # We don't want to append a steady state if it's less than min samples in length.
                 # if N > min_n_samples:
-                index_steady_states.append(time)
-                # logging.debug('The ''time'' stored is: %s' % (time))
+                index_steady_states.append(curTime)
+                # logging.debug('The ''curTime'' stored is: %s' % (curTime))
                 # last states steady power
                 steady_states.append(estimated_steady_power)
 
             # 3B
             last_steady_power = estimated_steady_power
             # 3C
-            time = row[0]
+            curTime = row[0]
 
         # Step 4: if a new steady state is starting, zero counter
         if instantaneous_change:
@@ -158,16 +179,16 @@ def find_steady_states(dataframe, min_n_samples=2, state_threshold=15,
     # Appending last edge
     last_transition = np.subtract(estimated_steady_power, last_steady_power)
     if np.sum(np.fabs(last_transition) > noise_level):
-        index_transitions.append(time)
+        index_transitions.append(curTime)
         transitions.append(last_transition)
-        index_steady_states.append(time)
+        index_steady_states.append(curTime)
         steady_states.append(estimated_steady_power)
 
     # Removing first edge if the starting steady state power is more
     # than the noise threshold
     #  https://github.com/nilmtk/nilmtk/issues/400
 
-    if np.sum(steady_states[0] > noise_level) and index_transitions[0] == index_steady_states[0] == dataframe.iloc[0].name:
+    if len(steady_states)>0 and np.sum(steady_states[0] > noise_level) and index_transitions[0] == index_steady_states[0] == dataframe.iloc[0].name:
         transitions = transitions[1:]
         index_transitions = index_transitions[1:]
         steady_states = steady_states[1:]
@@ -185,21 +206,21 @@ def find_steady_states(dataframe, min_n_samples=2, state_threshold=15,
                    2: ['active average', 'reactive average']}
 
     
-    if len(index_transitions) == 0:
-        # No events
-        return pd.DataFrame(), pd.DataFrame()
-    else:
-        transitions = pd.DataFrame(data=transitions, index=index_transitions,
-                                   columns=cols_transition[num_measurements])
-        print("Transition frame created.")
+    #if len(index_transitions) == 0:
+    #    # No events
+    #    return pd.DataFrame(), pd.DataFrame()
+    #else:
+    transitions = pd.DataFrame(data=transitions, index=index_transitions,
+                                columns=cols_transition[num_measurements])
+    print("Transition frame created.")
 
-        print("Creating states frame ...")
-        sys.stdout.flush()
-        steady_states = pd.DataFrame(data=steady_states, index=index_steady_states,
-                                     columns=cols_steady[num_measurements])
-        print("States frame created.")
-        print("Finished.")
-        return steady_states, transitions
+    print("Creating states frame ...")
+    sys.stdout.flush()
+    steady_states = pd.DataFrame(data=steady_states, index=index_steady_states,
+                                    columns=cols_steady[num_measurements])
+    print("States frame created.")
+    print("Finished.")
+    return steady_states, transitions
 
 
 def cluster(x, max_num_clusters=3):
