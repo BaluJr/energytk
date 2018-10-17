@@ -57,7 +57,7 @@ class Forecaster(Processing):
         '''
         The init function offers the possibility to overwrite the 
         default model by an own model, which can contain own parameters 
-        or even already a trained model.
+        or an already trained model.
 
         Paramters
         ---------
@@ -73,6 +73,7 @@ class Forecaster(Processing):
     def mape(self, z, l):
         ''' Small helpfunction implementing mape.
         Used as an error metric during optimization.
+        (So far only used within all subclasses based on neural networks.)
         
         Parameters
         ----------
@@ -92,7 +93,8 @@ class Forecaster(Processing):
     def mae(self, z, l):
         ''' Small helpfunction implementing mae.
         Used as an error metric during optimization.
-        
+        (So far only used within all subclasses based on neural networks.)
+
         Parameters
         ----------
         z: vector<float>
@@ -114,9 +116,10 @@ class Forecaster(Processing):
         
         Parameters
         ----------
-        meters: nilmtk.DataSet or str
-            The meters from which the demand is loaded. 
-            Alternatively a path to a PickleFile. 
+        meters: pd.DataFrame or nilmtk.DataSet or str
+            The meters from which the demand is loaded.
+            Or a DataFrame holding the data.
+            A third alternative is a path to a PickleFile. 
         ext_dataset: nilmtk.DataSet or str
             The External Dataset containing the fitting data.
             Alternatively a path to a PickleFile. 
@@ -217,8 +220,7 @@ class Forecaster(Processing):
         for i in all_shifts:
             chunk[('shifts', str(i))] = chunk[('power','active')].shift(i)
         return chunk.drop(chunk.index[chunk[('shifts',str(max(all_shifts)))].isnull()])
-           
-    
+               
 
     def _add_time_related_features(self, chunk, weekday_features, hour_features):
         ''' Add the time related features.
