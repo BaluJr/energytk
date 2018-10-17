@@ -50,7 +50,7 @@ class HDFDataStore(DataStore):
         if columns is not None:
             columns = [('' if pq is None else pq, '' if ac is None else ac)
                     for pq, ac in columns]
-            cols_idx = pd.MultiIndex.from_tuples(cols, names = ['physical_quantity', 'type'])
+            cols_idx = pd.MultiIndex.from_tuples(columns, names = ['physical_quantity', 'type'])
 
         if verbose:
             print("HDFDataStore.load(key='{}', columns='{}', sections='{}',"
